@@ -560,6 +560,115 @@ pub enum MyEnum {
 
 ---
 
+## Implementation Notes: Codegen Pipeline Fixes (Completed)
+
+### 1. Hub-macro $defs Extraction (commit `cdd9ebf`)
+
+**Problem:** Method parameter schemas were extracted from the root schema without including their `$defs` section. This left type references unresolved at the IR level.
+
+For example, a method using `ConeIdentifier` would receive:
+```json
+{
+  "params": {
+    "properties": {
+      "identifier": { "$ref": "#/$defs/ConeIdentifier" }  // 🔴 dangling reference
+    }
+  }
+}
+```
+
+**Root cause:** The `method_enum.rs` codegen only extracted the relevant `properties` but not the supporting `$defs` that defined custom types.
+
+**Solution:** Modified `/Users/user/dev/controlflow/hypermemetic/hub-macro/src/codegen/method_enum.rs` to:
+1. Extract the method's param schema as before
+2. Look up the root schema's `$defs` section
+3. Merge all definitions into the method's schema
+4. Result: self-contained schema with all type definitions available
+
+```json
+{
+  "params": {
+    "properties": {
+      "identifier": { "$ref": "#/$defs/ConeIdentifier" }
+    },
+    "$defs": {
+      "ConeIdentifier": {
+        "oneOf": [
+          { "type": "object", "properties": { "by_name": { "type": "string" } } },
+          { "type": "object", "properties": { "by_uuid": { "type": "string" } } }
+        ]
+      }
+    }  // ✅ now resolved
+  }
+}
+```
+
+### 2. ConeIdentifier Enum Format (commit `a563b8d`)
+
+**Problem:** The `ConeIdentifier` enum was serialized in adjacently-tagged format, which synapse's IR Builder couldn't parse:
+
+```json
+{
+  "by_name": {
+    "name": "my-cone"
+  }
+}
+```
+
+Synapse IR Builder expects the discriminant to be inline with the data (internally-tagged format), not wrapping it as a key.
+
+**Solution:** Updated `/Users/user/dev/controlflow/hypermemetic/substrate/src/activations/cone/methods.rs` to use internally-tagged format:
+
+```rust
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]  // ✅ added tag = "type"
+pub enum ConeIdentifier {
+    ByName { name: String },
+    ByUuid { uuid: String },
+}
+```
+
+Now serializes as:
+```json
+{
+  "type": "by_name",
+  "name": "my-cone"
+}
+```
+
+**Impact:** All enums in the codebase should use this format. This is now documented in the "Enum Format Requirements" section above.
+
+### Current Pipeline Status
+
+The end-to-end codegen pipeline now works:
+
+```
+Rust schema (JSON Schema)
+    ↓
+synapse plexus -i
+    ↓
+Synapse IR (types, methods)
+    ↓
+hub-codegen
+    ↓
+TypeScript client (type-safe)
+    ↓
+npx tsc --noEmit ✓ (compiles)
+```
+
+**Verification:**
+- `synapse plexus -i` generates IR from schema
+- `hub-codegen` generates TypeScript client from IR
+- `npx tsc --noEmit` compiles without errors
+- Minor warning for `SchemaResult` type (health plugin) - harmless
+
+**Next steps:**
+- Sync these fixes to hub-core, substrate-protocol, and synapse repositories
+- Update any other enums in the codebase to use internally-tagged format
+- Document the enum tagging requirement in contributing guidelines
+
+---
+
 ## Migration Path
 
 ### Phase 1: Namespace Consistency
