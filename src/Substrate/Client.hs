@@ -42,18 +42,20 @@ import Plexus.Types
 
 -- | Substrate connection configuration
 data SubstrateConfig = SubstrateConfig
-  { substrateHost :: String
-  , substratePort :: Int
-  , substratePath :: String
+  { substrateHost    :: String
+  , substratePort    :: Int
+  , substratePath    :: String
+  , substrateBackend :: Text    -- ^ Backend name (e.g., "plexus")
   }
   deriving stock (Show, Eq)
 
--- | Default configuration for local development
-defaultConfig :: SubstrateConfig
-defaultConfig = SubstrateConfig
+-- | Default configuration for local development (requires backend)
+defaultConfig :: Text -> SubstrateConfig
+defaultConfig backend = SubstrateConfig
   { substrateHost = "127.0.0.1"
   , substratePort = 4444
   , substratePath = "/"
+  , substrateBackend = backend
   }
 
 -- | Pending request with its queue, waiting for subscription ID

@@ -1,7 +1,7 @@
 -- | Low-level transport for Substrate RPC calls
 --
 -- Pure IO functions for WebSocket communication with the Substrate backend.
--- All Plexus calls go through 'plexus.call' for routing.
+-- All calls go through '<backend>.call' for routing.
 module Substrate.Transport
   ( -- * RPC Calls (collected)
     rpcCall
@@ -33,8 +33,8 @@ import Plexus.Types (PlexusStreamItem(..))
 import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
 
 -- | Low-level RPC call with default localhost config
-rpcCall :: Text -> Value -> IO (Either Text [PlexusStreamItem])
-rpcCall = rpcCallWith defaultConfig
+rpcCall :: Text -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+rpcCall backend = rpcCallWith (defaultConfig backend)
 
 -- | Low-level RPC call with custom config
 rpcCallWith :: SubstrateConfig -> Text -> Value -> IO (Either Text [PlexusStreamItem])
@@ -68,20 +68,22 @@ doCallStreaming cfg method params onItem = do
 -- | Streaming method invocation
 invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either Text ())
 invokeMethodStreaming cfg namespacePath method params onItem = do
-  let fullPath = if null namespacePath then ["plexus"] else namespacePath
+  let backend = substrateBackend cfg
+  let fullPath = if null namespacePath then [backend] else namespacePath
   let dotPath = T.intercalate "." (fullPath ++ [method])
   let callParams = object ["method" .= dotPath, "params" .= params]
-  rpcCallStreaming cfg "plexus.call" callParams onItem
+  rpcCallStreaming cfg (backend <> ".call") callParams onItem
 
 -- | Fetch schema at a specific path
--- Empty path = root (plexus.schema)
+-- Empty path = root (<backend>.schema)
 -- Non-empty path = child schema (e.g., ["solar", "earth"] -> solar.earth.schema)
 fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either Text PluginSchema)
 fetchSchemaAt cfg path = do
+  let backend = substrateBackend cfg
   let schemaMethod = if null path
-        then "plexus.schema"
+        then backend <> ".schema"
         else T.intercalate "." path <> ".schema"
-  result <- rpcCallWith cfg "plexus.call" (object ["method" .= schemaMethod])
+  result <- rpcCallWith cfg (backend <> ".call") (object ["method" .= schemaMethod])
   case result of
     Left err -> pure $ Left err
     Right items -> pure $ extractSchema items
@@ -99,10 +101,11 @@ extractSchema items =
 -- Uses the parameter-based query: plugin.schema with {"method": "name"}
 fetchMethodSchemaAt :: SubstrateConfig -> [Text] -> Text -> IO (Either Text MethodSchema)
 fetchMethodSchemaAt cfg path methodName = do
+  let backend = substrateBackend cfg
   let schemaMethod = if null path
-        then "plexus.schema"
+        then backend <> ".schema"
         else T.intercalate "." path <> ".schema"
-  result <- rpcCallWith cfg "plexus.call" (object
+  result <- rpcCallWith cfg (backend <> ".call") (object
     [ "method" .= schemaMethod
     , "params" .= object ["method" .= methodName]
     ])
@@ -125,13 +128,15 @@ extractSchemaResult items =
 -- | Invoke a method and return stream items
 invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value -> IO (Either Text [PlexusStreamItem])
 invokeMethod cfg namespacePath method params = do
-  let fullPath = if null namespacePath then ["plexus"] else namespacePath
+  let backend = substrateBackend cfg
+  let fullPath = if null namespacePath then [backend] else namespacePath
   let dotPath = T.intercalate "." (fullPath ++ [method])
   let callParams = object ["method" .= dotPath, "params" .= params]
-  rpcCallWith cfg "plexus.call" callParams
+  rpcCallWith cfg (backend <> ".call") callParams
 
 -- | Invoke with raw method path
 invokeRaw :: SubstrateConfig -> Text -> Value -> IO (Either Text [PlexusStreamItem])
 invokeRaw cfg method params = do
+  let backend = substrateBackend cfg
   let callParams = object ["method" .= method, "params" .= params]
-  rpcCallWith cfg "plexus.call" callParams
+  rpcCallWith cfg (backend <> ".call") callParams
