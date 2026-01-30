@@ -74,40 +74,43 @@ data SubstrateConnection = SubstrateConnection
   }
 
 -- | Connect to substrate
+-- Throws an exception if connection fails
 connect :: SubstrateConfig -> IO SubstrateConnection
 connect SubstrateConfig{..} = do
   -- Initialize state
   nextId <- newIORef 1
   subs   <- newTVarIO Map.empty
   pendingReqs <- newTVarIO Map.empty
-  connVar <- newEmptyTMVarIO
-  readerVar <- newEmptyTMVarIO
+  resultVar <- newEmptyTMVarIO  -- Either error message or (conn, reader)
 
   -- Run WebSocket client in a background thread
+  -- Catch exceptions inside the thread to prevent them from being printed
   void $ forkIO $
-    WS.runClient substrateHost substratePort substratePath $ \conn -> do
-      -- Start reader in yet another thread (so we can signal back)
+    (WS.runClient substrateHost substratePort substratePath $ \conn -> do
       reader <- async $ readerLoop conn subs pendingReqs
-
-      -- Signal connection is ready
-      atomically $ putTMVar connVar conn
-      atomically $ putTMVar readerVar reader
-
-      -- Keep alive until reader exits (ignore cancellation)
+      -- Signal success
+      atomically $ putTMVar resultVar (Right (conn, reader))
+      -- Keep alive until reader exits
       void (wait reader) `catch` \(_ :: SomeException) -> pure ()
+    ) `catch` \(e :: SomeException) ->
+      -- Signal failure (don't print, just capture)
+      atomically $ putTMVar resultVar (Left $ show e)
 
-  -- Wait for connection (with small delay to let the fork start)
-  threadDelay 100000  -- 100ms
-  conn <- atomically $ takeTMVar connVar
-  reader <- atomically $ takeTMVar readerVar
+  -- Wait for connection result (with timeout)
+  threadDelay 200000  -- 200ms
+  mResult <- atomically $ tryTakeTMVar resultVar
 
-  pure SubstrateConnection
-    { scConnection    = conn
-    , scNextId        = nextId
-    , scSubscriptions = subs
-    , scPendingReqs   = pendingReqs
-    , scReaderThread  = reader
-    }
+  case mResult of
+    Nothing -> error "Connection timeout"
+    Just (Left err) -> error $ "Connection failed: " <> err
+    Just (Right (conn, reader)) ->
+      pure SubstrateConnection
+        { scConnection    = conn
+        , scNextId        = nextId
+        , scSubscriptions = subs
+        , scPendingReqs   = pendingReqs
+        , scReaderThread  = reader
+        }
 
 -- | Disconnect from substrate
 disconnect :: SubstrateConnection -> IO ()
