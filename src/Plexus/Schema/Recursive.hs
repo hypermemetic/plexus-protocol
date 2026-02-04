@@ -35,8 +35,8 @@ module Plexus.Schema.Recursive
   , SchemaResult(..)
 
     -- * Queries
-  , isHub
-  , isLeaf
+  , isHubActivation
+  , isLeafActivation
   , pluginMethods
   , pluginChildren
   , childNamespaces
@@ -126,7 +126,7 @@ data PluginSchema = PluginSchema
   , psLongDescription :: Maybe Text  -- ^ Extended description (no word limit)
   , psHash            :: PluginHash
   , psMethods         :: [MethodSchema]
-  , psChildren        :: Maybe [ChildSummary]  -- ^ Nothing = leaf, Just = hub
+  , psChildren        :: Maybe [ChildSummary]  -- ^ Nothing = leaf, Just = hub activation
   }
   deriving stock (Show, Eq, Generic)
 
@@ -172,13 +172,13 @@ instance ToJSON SchemaResult where
 -- Basic Queries
 -- ============================================================================
 
--- | Is this a hub (has children)?
-isHub :: PluginSchema -> Bool
-isHub = maybe False (not . null) . psChildren
+-- | Is this a hub activation (has children)?
+isHubActivation :: PluginSchema -> Bool
+isHubActivation = maybe False (not . null) . psChildren
 
--- | Is this a leaf (no children)?
-isLeaf :: PluginSchema -> Bool
-isLeaf = not . isHub
+-- | Is this a leaf activation (no children)?
+isLeafActivation :: PluginSchema -> Bool
+isLeafActivation = not . isHubActivation
 
 -- | Get methods (alias for psMethods)
 pluginMethods :: PluginSchema -> [MethodSchema]
