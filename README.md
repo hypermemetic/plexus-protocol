@@ -1,6 +1,6 @@
-# substrate-protocol
+# plexus-protocol
 
-**Haskell types for the Plexus protocol** — shared between Synapse and other clients.
+**Haskell types for Plexus RPC** — shared between Synapse and other Plexus RPC clients.
 
 ## Layers
 
@@ -14,8 +14,8 @@
 └─────────────────────────────────────────┘
 ```
 
-**Substrate** = transport layer (WebSocket, JSON-RPC)
-**Plexus** = protocol types (schemas, stream items)
+**Substrate** = transport layer modules (WebSocket, JSON-RPC)
+**Plexus** = Plexus RPC protocol types (schemas, stream items)
 
 ## Usage
 
