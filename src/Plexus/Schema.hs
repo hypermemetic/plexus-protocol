@@ -1,6 +1,6 @@
 -- | Schema types for dynamic CLI discovery
 --
--- These types mirror the substrate's PlexusSchema and ActivationInfo,
+-- These types mirror the Substrate server's PlexusSchema and ActivationInfo,
 -- allowing the CLI to discover available commands at runtime.
 module Plexus.Schema
   ( -- * Schema Types
@@ -198,7 +198,7 @@ resolvePropertyRefs maybeDefs prop = case (propRef prop, maybeDefs) of
 -- Enriched Schema Types (from plexus_activation_schema)
 -- ============================================================================
 
--- | Enriched JSON Schema from substrate
+-- | Enriched JSON Schema from Substrate server
 -- Mirrors the Rust Schema type from plexus/schema.rs
 data EnrichedSchema = EnrichedSchema
   { schemaTitle       :: Maybe Text

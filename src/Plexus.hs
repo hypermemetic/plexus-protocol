@@ -1,6 +1,6 @@
--- | Plexus Protocol Types and Client
+-- | Plexus RPC Types and Client
 --
--- Re-exports from Substrate (transport) and Plexus (protocol types).
+-- Re-exports from Plexus (transport and client) and Plexus (RPC types).
 --
 -- = Quick Start
 --
@@ -23,7 +23,7 @@
 --
 -- = Stream Items
 --
--- The plexus protocol returns a unified stream type with variants:
+-- The Plexus RPC protocol returns a unified stream type with variants:
 --
 -- * 'StreamProgress' - Progress updates with optional percentage
 -- * 'StreamData' - Actual data with content type information
@@ -31,7 +31,7 @@
 -- * 'StreamDone' - Stream completed successfully
 --
 module Plexus
-  ( -- * Connection (re-exported from Substrate.Client)
+  ( -- * Connection (re-exported from Plexus.Client)
     SubstrateConnection
   , SubstrateConfig(..)
   , defaultConfig
@@ -41,7 +41,7 @@ module Plexus
     -- * Core RPC (streaming)
   , substrateRpc
 
-    -- * High-level RPC (collected, re-exported from Substrate.Transport)
+    -- * High-level RPC (collected, re-exported from Plexus.Transport)
   , rpcCall
   , rpcCallWith
   , fetchSchemaAt
@@ -73,5 +73,5 @@ module Plexus
 
 import Plexus.Types
 import Plexus.Schema.Recursive
-import Substrate.Client
-import Substrate.Transport
+import Plexus.Client
+import Plexus.Transport

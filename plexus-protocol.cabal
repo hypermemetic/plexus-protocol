@@ -1,7 +1,7 @@
 cabal-version:      3.0
-name:               substrate-protocol
+name:               plexus-protocol
 version:            0.2.0.0
-synopsis:           Plexus protocol types and client for Substrate
+synopsis:           Plexus RPC protocol types and client
 license:            MIT
 author:
 maintainer:
@@ -9,8 +9,8 @@ build-type:         Simple
 
 library
   exposed-modules:
-    Substrate.Client
-    Substrate.Transport
+    Plexus.Client
+    Plexus.Transport
     Plexus
     Plexus.Types
     Plexus.Schema

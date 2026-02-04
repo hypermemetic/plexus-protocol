@@ -7,7 +7,7 @@
 -- @
 --
 -- This establishes a subscription and yields stream items until completion.
-module Substrate.Client
+module Plexus.Client
   ( -- * Connection
     SubstrateConnection
   , connect

@@ -2,7 +2,7 @@
 --
 -- Pure IO functions for WebSocket communication with the Substrate backend.
 -- All calls go through '<backend>.call' for routing.
-module Substrate.Transport
+module Plexus.Transport
   ( -- * RPC Calls (collected)
     rpcCall
   , rpcCallWith
@@ -28,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Streaming.Prelude as S
 
-import Substrate.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
+import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
 import Plexus.Types (PlexusStreamItem(..))
 import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
 

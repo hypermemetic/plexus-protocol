@@ -1,4 +1,4 @@
--- | JSON-RPC types for communicating with the Plexus
+-- | JSON-RPC types for communicating with Plexus RPC servers
 module Plexus.Types
   ( -- * JSON-RPC Protocol
     RpcRequest(..)
@@ -243,7 +243,7 @@ instance ToJSON GuidanceSuggestion where
     , "message" .= message
     ]
 
--- | Unified stream item from the plexus
+-- | Unified stream item from Plexus RPC
 --
 -- New format uses metadata wrapper:
 -- @{"type":"data","metadata":{...},"content_type":"...","content":{...}}@
@@ -391,6 +391,6 @@ mkUnsubscribeRequest rid unsubMethod subId = RpcRequest
   , rpcReqId      = rid
   }
 
--- | Extract the plexus hash from a stream item
+-- | Extract the Plexus RPC hash from a stream item
 getPlexusHash :: PlexusStreamItem -> Text
 getPlexusHash = itemPlexusHash

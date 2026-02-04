@@ -1,4 +1,4 @@
--- | Shallow plugin schema for the Plexus protocol
+-- | Shallow plugin schema for Plexus RPC
 --
 -- = Design
 --
