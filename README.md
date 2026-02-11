@@ -48,6 +48,57 @@ print $ methodParams method -- Just (JSON Schema)
 
 ## Types
 
+### Transport Errors (v0.3.0+)
+
+Strongly-typed errors for transport-layer failures:
+
+```haskell
+data TransportError
+  = ConnectionRefused { transportHost :: Text, transportPort :: Int }
+  | ConnectionTimeout { transportHost :: Text, transportPort :: Int }
+  | ProtocolError     { transportMessage :: Text }
+  | NetworkError      { transportMessage :: Text }
+```
+
+All transport functions return `Either TransportError a` instead of `Either Text a`:
+
+```haskell
+-- Schema fetching
+fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either TransportError PluginSchema)
+
+-- Method invocation
+invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value
+             -> IO (Either TransportError [PlexusStreamItem])
+
+-- Streaming invocation
+invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value
+                      -> (PlexusStreamItem -> IO ())
+                      -> IO (Either TransportError ())
+```
+
+**Benefits:**
+- No string parsing to categorize errors
+- Structured error information (host, port, message)
+- Type-safe error handling
+- Proper exception categorization using `IOException` matching
+
+**Example:**
+
+```haskell
+result <- fetchSchemaAt cfg ["echo"]
+case result of
+  Left (ConnectionRefused host port) ->
+    putStrLn $ "Can't connect to " <> host <> ":" <> show port
+  Left (ConnectionTimeout host port) ->
+    putStrLn $ "Timeout connecting to " <> host <> ":" <> show port
+  Left (ProtocolError msg) ->
+    putStrLn $ "Protocol error: " <> msg
+  Left (NetworkError msg) ->
+    putStrLn $ "Network error: " <> msg
+  Right schema ->
+    print schema
+```
+
 ### Stream Items
 
 ```haskell
