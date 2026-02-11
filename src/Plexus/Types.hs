@@ -15,6 +15,7 @@ module Plexus.Types
   , StreamMetadata(..)
   , GuidanceErrorType(..)
   , GuidanceSuggestion(..)
+  , TransportError(..)
 
     -- * Helpers
   , mkSubscribeRequest
@@ -176,6 +177,9 @@ data GuidanceErrorType
       { errorMethod :: Text
       , errorReason :: Text
       }
+  | TransportErrorGuidance
+      { errorTransport :: TransportError
+      }
   deriving stock (Show, Eq, Generic)
 
 instance FromJSON GuidanceErrorType where
@@ -185,6 +189,7 @@ instance FromJSON GuidanceErrorType where
       "activation_not_found" -> ActivationNotFound <$> o .: "activation"
       "method_not_found" -> MethodNotFound <$> o .: "activation" <*> o .: "method"
       "invalid_params" -> InvalidParams <$> o .: "method" <*> o .: "reason"
+      "transport_error" -> TransportErrorGuidance <$> parseJSON (Object o)
       _ -> fail $ "Unknown error_kind: " <> T.unpack kind
 
 instance ToJSON GuidanceErrorType where
@@ -202,6 +207,11 @@ instance ToJSON GuidanceErrorType where
     , "method" .= method
     , "reason" .= reason
     ]
+  toJSON (TransportErrorGuidance transportErr) =
+    -- Merge the transport error JSON with error_kind
+    case toJSON transportErr of
+      Object o -> Object o
+      _ -> object ["error_kind" .= ("transport_error" :: Text)]
 
 -- | Suggestion for next action from guidance events
 data GuidanceSuggestion
@@ -222,14 +232,14 @@ instance FromJSON GuidanceSuggestion where
   parseJSON = withObject "GuidanceSuggestion" $ \o -> do
     action <- o .: "action" :: Parser Text
     case action of
-      "call_plexus_schema" -> pure CallPlexusSchema
+      "call_plexus_schema" -> pure CallPlexusSchema  -- Legacy: maps to {backend}.schema
       "call_activation_schema" -> CallActivationSchema <$> o .: "namespace"
       "try_method" -> TryMethod <$> o .: "method" <*> o .:? "example_params"
       "custom" -> CustomGuidance <$> o .: "message"
       _ -> fail $ "Unknown action: " <> T.unpack action
 
 instance ToJSON GuidanceSuggestion where
-  toJSON CallPlexusSchema = object ["action" .= ("call_plexus_schema" :: Text)]
+  toJSON CallPlexusSchema = object ["action" .= ("call_plexus_schema" :: Text)]  -- Legacy: represents {backend}.schema
   toJSON (CallActivationSchema namespace) = object
     [ "action" .= ("call_activation_schema" :: Text)
     , "namespace" .= namespace
@@ -242,6 +252,63 @@ instance ToJSON GuidanceSuggestion where
     [ "action" .= ("custom" :: Text)
     , "message" .= message
     ]
+
+-- ============================================================================
+-- Transport Errors
+-- ============================================================================
+
+-- | Strongly-typed transport-level errors
+-- These occur before reaching the backend (connection, network, protocol issues)
+data TransportError
+  = ConnectionRefused
+      { transportHost :: Text
+      , transportPort :: Int
+      }
+  | ConnectionTimeout
+      { transportHost :: Text
+      , transportPort :: Int
+      }
+  | ProtocolError
+      { transportMessage :: Text
+      }
+  | NetworkError
+      { transportMessage :: Text
+      }
+  deriving stock (Show, Eq, Generic)
+
+instance ToJSON TransportError where
+  toJSON (ConnectionRefused host port) = object
+    [ "error_kind" .= ("connection_refused" :: Text)
+    , "host" .= host
+    , "port" .= port
+    ]
+  toJSON (ConnectionTimeout host port) = object
+    [ "error_kind" .= ("connection_timeout" :: Text)
+    , "host" .= host
+    , "port" .= port
+    ]
+  toJSON (ProtocolError msg) = object
+    [ "error_kind" .= ("protocol_error" :: Text)
+    , "message" .= msg
+    ]
+  toJSON (NetworkError msg) = object
+    [ "error_kind" .= ("network_error" :: Text)
+    , "message" .= msg
+    ]
+
+instance FromJSON TransportError where
+  parseJSON = withObject "TransportError" $ \o -> do
+    kind <- o .: "error_kind" :: Parser Text
+    case kind of
+      "connection_refused" -> ConnectionRefused <$> o .: "host" <*> o .: "port"
+      "connection_timeout" -> ConnectionTimeout <$> o .: "host" <*> o .: "port"
+      "protocol_error" -> ProtocolError <$> o .: "message"
+      "network_error" -> NetworkError <$> o .: "message"
+      _ -> fail $ "Unknown transport error_kind: " <> T.unpack kind
+
+-- ============================================================================
+-- Plexus Stream Items
+-- ============================================================================
 
 -- | Unified stream item from Plexus RPC
 --

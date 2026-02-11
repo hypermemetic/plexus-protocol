@@ -115,7 +115,7 @@ instance ToJSON MethodSchema where
     , "streaming"   .= methodStreaming
     ]
 
--- | Shallow plugin schema (what we receive from plexus_schema)
+-- | Shallow plugin schema (what we receive from {backend}.schema)
 --
 -- Children are summaries only - fetch full schema on-demand when navigating.
 -- This is the wire format: one layer of observation at a time.

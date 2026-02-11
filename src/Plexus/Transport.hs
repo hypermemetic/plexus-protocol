@@ -22,27 +22,55 @@ module Plexus.Transport
   , invokeRaw
   ) where
 
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException, IOException, catch, fromException)
+import qualified Control.Exception as E
 import Data.Aeson hiding (Error)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Streaming.Prelude as S
+import qualified Network.Socket as NS
 
 import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
-import Plexus.Types (PlexusStreamItem(..))
+import Plexus.Types (PlexusStreamItem(..), TransportError(..))
 import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
 
 -- | Low-level RPC call with default localhost config
-rpcCall :: Text -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+rpcCall :: Text -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 rpcCall backend = rpcCallWith (defaultConfig backend)
 
 -- | Low-level RPC call with custom config
-rpcCallWith :: SubstrateConfig -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+rpcCallWith :: SubstrateConfig -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 rpcCallWith cfg method params = do
   result <- (Right <$> doCallInner cfg method params)
-    `catch` \(e :: SomeException) ->
-      pure $ Left $ T.pack $ "Connection error: " <> show e
+    `catch` categorizeException cfg
   pure result
+
+-- | Categorize exceptions into typed TransportError
+categorizeException :: SubstrateConfig -> SomeException -> IO (Either TransportError a)
+categorizeException cfg e
+  -- Check for connection refused (most common)
+  | Just ioErr <- fromException e :: Maybe IOException = do
+      let errMsg = show ioErr
+      let host = T.pack $ substrateHost cfg
+      let port = substratePort cfg
+      pure $ Left $ if "refused" `isInfixOf` errMsg || "ECONNREFUSED" `isInfixOf` errMsg
+        then ConnectionRefused host port
+        else if "timeout" `isInfixOf` errMsg || "ETIMEDOUT" `isInfixOf` errMsg
+          then ConnectionTimeout host port
+          else NetworkError (T.pack errMsg)
+
+  -- Catch protocol/parse errors
+  | otherwise =
+      let errMsg = show e
+          host = T.pack $ substrateHost cfg
+          port = substratePort cfg
+      in pure $ Left $ if "protocol" `isInfixOf` errMsg || "parse" `isInfixOf` errMsg
+        then ProtocolError (T.pack errMsg)
+        else NetworkError (T.pack errMsg)
+
+  where
+    isInfixOf = T.isInfixOf `on` (T.toLower . T.pack)
+    on f g x y = f (g x) (g y)
 
 doCallInner :: SubstrateConfig -> Text -> Value -> IO [PlexusStreamItem]
 doCallInner cfg method params = do
@@ -52,11 +80,10 @@ doCallInner cfg method params = do
   pure items
 
 -- | Streaming RPC call - invokes callback for each item as it arrives
-rpcCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either Text ())
+rpcCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
 rpcCallStreaming cfg method params onItem = do
   result <- (Right <$> doCallStreaming cfg method params onItem)
-    `catch` \(e :: SomeException) ->
-      pure $ Left $ T.pack $ "Connection error: " <> show e
+    `catch` categorizeException cfg
   pure result
 
 doCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO ()
@@ -66,7 +93,7 @@ doCallStreaming cfg method params onItem = do
   disconnect conn
 
 -- | Streaming method invocation
-invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either Text ())
+invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
 invokeMethodStreaming cfg namespacePath method params onItem = do
   let backend = substrateBackend cfg
   let fullPath = if null namespacePath then [backend] else namespacePath
@@ -77,7 +104,7 @@ invokeMethodStreaming cfg namespacePath method params onItem = do
 -- | Fetch schema at a specific path
 -- Empty path = root (<backend>.schema)
 -- Non-empty path = child schema (e.g., ["solar", "earth"] -> solar.earth.schema)
-fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either Text PluginSchema)
+fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either TransportError PluginSchema)
 fetchSchemaAt cfg path = do
   let backend = substrateBackend cfg
   let schemaMethod = if null path
@@ -85,10 +112,13 @@ fetchSchemaAt cfg path = do
         else T.intercalate "." path <> ".schema"
   result <- rpcCallWith cfg (backend <> ".call") (object ["method" .= schemaMethod])
   case result of
-    Left err -> pure $ Left err
-    Right items -> pure $ extractSchema items
+    Left transportErr -> pure $ Left transportErr
+    Right items -> case extractSchema items of
+      Left parseErr -> pure $ Left $ ProtocolError parseErr  -- Parse errors are protocol errors
+      Right schema -> pure $ Right schema
 
 -- | Extract PluginSchema from stream items
+-- Returns Either Text for application-level errors (not transport)
 extractSchema :: [PlexusStreamItem] -> Either Text PluginSchema
 extractSchema items =
   case [dat | StreamData _ _ ct dat <- items, ".schema" `T.isSuffixOf` ct] of
@@ -99,7 +129,7 @@ extractSchema items =
 
 -- | Fetch a specific method's schema
 -- Uses the parameter-based query: plugin.schema with {"method": "name"}
-fetchMethodSchemaAt :: SubstrateConfig -> [Text] -> Text -> IO (Either Text MethodSchema)
+fetchMethodSchemaAt :: SubstrateConfig -> [Text] -> Text -> IO (Either TransportError MethodSchema)
 fetchMethodSchemaAt cfg path methodName = do
   let backend = substrateBackend cfg
   let schemaMethod = if null path
@@ -110,11 +140,11 @@ fetchMethodSchemaAt cfg path methodName = do
     , "params" .= object ["method" .= methodName]
     ])
   case result of
-    Left err -> pure $ Left err
+    Left transportErr -> pure $ Left transportErr
     Right items -> case extractSchemaResult items of
-      Left err -> pure $ Left err
+      Left parseErr -> pure $ Left $ ProtocolError parseErr
       Right (SchemaMethod m) -> pure $ Right m
-      Right (SchemaPlugin _) -> pure $ Left "Expected method schema, got plugin schema"
+      Right (SchemaPlugin _) -> pure $ Left $ ProtocolError "Expected method schema, got plugin schema"
 
 -- | Extract SchemaResult (plugin or method) from stream items
 extractSchemaResult :: [PlexusStreamItem] -> Either Text SchemaResult
@@ -126,7 +156,7 @@ extractSchemaResult items =
       [] -> Left "No schema in response"
 
 -- | Invoke a method and return stream items
-invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 invokeMethod cfg namespacePath method params = do
   let backend = substrateBackend cfg
   let fullPath = if null namespacePath then [backend] else namespacePath
@@ -135,7 +165,7 @@ invokeMethod cfg namespacePath method params = do
   rpcCallWith cfg (backend <> ".call") callParams
 
 -- | Invoke with raw method path
-invokeRaw :: SubstrateConfig -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+invokeRaw :: SubstrateConfig -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 invokeRaw cfg method params = do
   let backend = substrateBackend cfg
   let callParams = object ["method" .= method, "params" .= params]
