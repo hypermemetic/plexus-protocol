@@ -48,7 +48,7 @@ import Plexus.Types (PlexusStreamItem(..))
 import qualified Plexus.Schema.Recursive as RecursiveSchema
 
 -- ============================================================================
--- Core Schema Types (from plexus_schema subscription)
+-- Core Schema Types (from {backend}.schema subscription)
 -- ============================================================================
 
 -- | Information about a single activation
@@ -76,7 +76,7 @@ instance ToJSON ActivationInfo where
     , "methods"     .= activationMethods
     ]
 
--- | Top-level schema returned by plexus_schema subscription
+-- | Top-level schema returned by {backend}.schema subscription
 data PlexusSchema = PlexusSchema
   { schemaActivations  :: [ActivationInfo]
   , schemaTotalMethods :: Int
@@ -511,7 +511,7 @@ toParamSchema required (name, prop) = ParamSchema
 -- ============================================================================
 
 -- | Extract PlexusSchemaEvent from a stream item
--- The plexus_schema subscription uses content_type "plexus.schema"
+-- The {backend}.schema subscription uses content_type "plexus.schema"
 extractSchemaEvent :: PlexusStreamItem -> Maybe PlexusSchemaEvent
 extractSchemaEvent (StreamData _ _ contentType dat)
   | contentType == "plexus.schema" =
@@ -558,7 +558,7 @@ extractHashEvent (StreamError _ _ err _) = Just (HashError err)
 extractHashEvent _ = Nothing
 
 -- | Extract recursive plugin schema from stream item
--- The plexus_schema subscription uses content_type "plexus.schema"
+-- The {backend}.schema subscription uses content_type "plexus.schema"
 -- and returns the full recursive schema structure
 extractRecursiveSchema :: PlexusStreamItem -> Maybe (Either Text RecursiveSchema.PluginSchema)
 extractRecursiveSchema (StreamData _ _ contentType dat)

@@ -5,7 +5,7 @@
 **Goal:** Unify the wire format and naming conventions across all hubs, preparing for multi-backend architecture.
 
 **Key Changes:**
-1. `plexus_call` → `plexus.call` (consistent dot notation)
+1. `plexus_call` → `{backend}.call` (backend-namespaced dot notation)
 2. Synapse CLI: `synapse echo once` → `synapse plexus echo once` (explicit backend)
 3. Remove `CallEvent` wrapper - return `PlexusStreamItem` directly from `hub.call`
 4. Every response on the wire is `PlexusStreamItem` (uniform envelope)
@@ -16,14 +16,14 @@
 | hub-core | Remove CallEvent, plexus.call returns PlexusStreamItem directly |
 | hub-macro | Rename generated RPC from `_` to `.` notation |
 | substrate | Update RPC registration for dot notation |
-| substrate-protocol | Change `"plexus_call"` → `"plexus.call"` in Transport.hs |
+| substrate-protocol | Change `"plexus_call"` → `"{backend}.call"` in Transport.hs |
 | synapse | Add backend as first path segment, remove CallEvent unwrap |
 | hub-codegen | Add PlexusStreamItem to IR, two-layer generation |
 
 **Wire Format (after changes):**
 ```json
 // Request
-{"jsonrpc": "2.0", "method": "plexus.call", "params": {"method": "echo.once", "params": {"message": "hi"}}, "id": 1}
+{"jsonrpc": "2.0", "method": "{backend}.call", "params": {"method": "echo.once", "params": {"message": "hi"}}, "id": 1}
 
 // Response (uniform PlexusStreamItem envelope)
 {"type": "data", "content_type": "echo.once", "content": {...}, "metadata": {"provenance": ["echo"], "plexus_hash": "...", "timestamp": ...}}
@@ -68,10 +68,10 @@ pub struct StreamMetadata {
 ```
 
 **Current problem being solved:**
-- `plexus.call` returns `CallEvent` which wraps `PlexusStreamItem` content
+- `{backend}.call` returns `CallEvent` which wraps `PlexusStreamItem` content
 - This creates double-wrapping: domain → PlexusStreamItem → CallEvent → PlexusStreamItem
 - Synapse has special unwrap logic for CallEvent
-- `plexus_call` uses underscore while everything else uses dots
+- Old `plexus_call` used underscore while everything else uses dots (now standardized to `{backend}.call`)
 
 ---
 
@@ -83,17 +83,20 @@ Move from a single Plexus hub to multiple spawnable hub backends, each serving a
 
 ### RPC Method Naming
 
-Change from underscore to dot notation for consistency:
+Change from underscore to backend-namespaced dot notation for consistency:
 
 ```
-# Before (inconsistent)
+# Before (inconsistent - old underscore notation)
 plexus_call, plexus_schema, plexus_hash
 
-# After (consistent with plugin namespacing)
+# After (consistent backend-namespaced dot notation)
+{backend}.call, {backend}.schema, {backend}.hash
+
+# For plexus backend specifically:
 plexus.call, plexus.schema, plexus.hash
 ```
 
-All methods follow `namespace.method` pattern uniformly.
+All methods follow `namespace.method` pattern uniformly, with the backend name as the namespace.
 
 ### Synapse CLI - Explicit Backend Namespacing
 
@@ -145,7 +148,7 @@ Synapse can:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "plexus.call",
+  "method": "{backend}.call",
   "params": {
     "method": "echo.once",
     "params": { "message": "hello" }
@@ -153,7 +156,7 @@ Synapse can:
 }
 ```
 
-Or direct method call (still routed through `plexus.call` internally):
+Or direct method call (still routed through `{backend}.call` internally):
 ```json
 {
   "jsonrpc": "2.0",
@@ -170,7 +173,7 @@ Or direct method call (still routed through `plexus.call` internally):
 │  Synapse / Client                   │
 │  Unwraps CallEvent → PlexusStreamItem│
 ├─────────────────────────────────────┤
-│  plexus.call                        │
+│  {backend}.call                     │
 │  Returns Stream<CallEvent>          │
 │  (CallEvent wraps PlexusStreamItem) │
 ├─────────────────────────────────────┤
@@ -183,7 +186,7 @@ Or direct method call (still routed through `plexus.call` internally):
 **Problems:**
 - `CallEvent` is redundant (PlexusStreamItem minus metadata)
 - Double-wrapping: DomainEvent → PlexusStreamItem → CallEvent → PlexusStreamItem
-- Only Plexus has `call` - not uniform across hubs
+- Only specific backends have `call` - needs to be uniform across hubs
 - Synapse needs special unwrap logic for CallEvent
 
 ## Target Architecture
@@ -227,7 +230,7 @@ This is already true - `wrap_stream` produces this. The change is making it expl
 
 ### 2. Remove CallEvent
 
-`plexus.call` (and any hub's `call`) returns `PlexusStreamItem` directly:
+`{backend}.call` (any hub's `call` method) returns `PlexusStreamItem` directly:
 
 ```rust
 // Before
@@ -384,7 +387,7 @@ Each hub:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "plexus.call",
+  "method": "{backend}.call",
   "params": {
     "method": "echo.once",
     "params": { "message": "hello" }
@@ -409,7 +412,7 @@ Each hub:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "plexus.call",
+  "method": "{backend}.call",
   "params": {
     "method": "solar.observe",
     "params": {}
@@ -430,7 +433,7 @@ Each hub:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "plexus.call",
+  "method": "{backend}.call",
   "params": {
     "method": "solar.earth.info",
     "params": {}
@@ -451,7 +454,7 @@ Each hub:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "plexus.call",
+  "method": "{backend}.call",
   "params": {
     "method": "solar.earth.luna.info",
     "params": {}
@@ -472,7 +475,7 @@ Each hub:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "plexus.call",
+  "method": "{backend}.call",
   "params": {
     "method": "cone.chat",
     "params": { "identifier": "my-cone", "prompt": "Hello!" }
@@ -497,7 +500,7 @@ Each hub:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "plexus.call",
+  "method": "{backend}.call",
   "params": {
     "method": "nonexistent.method",
     "params": {}
@@ -672,13 +675,13 @@ npx tsc --noEmit ✓ (compiles)
 ## Migration Path
 
 ### Phase 1: Namespace Consistency
-1. **Rename RPC methods** from `plexus_call` → `plexus.call` (dot notation)
+1. **Rename RPC methods** from `plexus_call` → `{backend}.call` (backend-namespaced dot notation)
 2. **Update synapse CLI** to require explicit backend: `synapse plexus <path>`
 3. **Update substrate-protocol** Transport layer for new method names
 
 ### Phase 2: Remove Double-Wrapping
 4. **Add PlexusStreamItem to IR** as a core type with JSON Schema
-5. **Change plexus.call** to return `impl Stream<Item = PlexusStreamItem>`
+5. **Change {backend}.call** to return `impl Stream<Item = PlexusStreamItem>`
 6. **Remove CallEvent** entirely
 7. **Remove synapse unwrap** - PlexusStreamItem is already the expected type
 
