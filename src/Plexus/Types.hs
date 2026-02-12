@@ -17,6 +17,11 @@ module Plexus.Types
   , GuidanceSuggestion(..)
   , TransportError(..)
 
+    -- * Bidirectional Types
+  , SelectOption(..)
+  , StandardRequest(..)
+  , StandardResponse(..)
+
     -- * Helpers
   , mkSubscribeRequest
   , mkUnsubscribeRequest
@@ -24,6 +29,7 @@ module Plexus.Types
   ) where
 
 import Data.Aeson
+import Data.Aeson.Casing (snakeCase)
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (catMaybes)
@@ -307,6 +313,102 @@ instance FromJSON TransportError where
       _ -> fail $ "Unknown transport error_kind: " <> T.unpack kind
 
 -- ============================================================================
+-- Bidirectional Types (Request/Response)
+-- ============================================================================
+
+-- | Option for select requests
+data SelectOption = SelectOption
+  { optionValue       :: Text
+  , optionLabel       :: Text
+  , optionDescription :: Maybe Text
+  }
+  deriving (Show, Eq, Generic)
+
+instance FromJSON SelectOption where
+  parseJSON = genericParseJSON defaultOptions { fieldLabelModifier = snakeCase . drop 6 }
+
+instance ToJSON SelectOption where
+  toJSON = genericToJSON defaultOptions { fieldLabelModifier = snakeCase . drop 6 }
+
+-- | Standard request types for bidirectional communication
+data StandardRequest
+  = ConfirmRequest { confirmMessage :: Text, confirmDefault :: Maybe Bool }
+  | PromptRequest { promptMessage :: Text, promptDefault :: Maybe Text, promptPlaceholder :: Maybe Text }
+  | SelectRequest { selectMessage :: Text, selectOptions :: [SelectOption], selectMulti :: Bool }
+  deriving (Show, Eq, Generic)
+
+instance FromJSON StandardRequest where
+  parseJSON = withObject "StandardRequest" $ \o -> do
+    typ <- o .: "type" :: Parser Text
+    case typ of
+      "confirm" -> ConfirmRequest
+        <$> o .: "message"
+        <*> o .:? "default"
+      "prompt" -> PromptRequest
+        <$> o .: "message"
+        <*> o .:? "default"
+        <*> o .:? "placeholder"
+      "select" -> SelectRequest
+        <$> o .: "message"
+        <*> o .: "options"
+        <*> o .:? "multi" .!= False
+      _ -> fail $ "Unknown request type: " <> T.unpack typ
+
+instance ToJSON StandardRequest where
+  toJSON (ConfirmRequest msg def) = object $
+    [ "type" .= ("confirm" :: Text)
+    , "message" .= msg
+    ] <> catMaybes [("default" .=) <$> def]
+  toJSON (PromptRequest msg def placeholder) = object $
+    [ "type" .= ("prompt" :: Text)
+    , "message" .= msg
+    ] <> catMaybes
+    [ ("default" .=) <$> def
+    , ("placeholder" .=) <$> placeholder
+    ]
+  toJSON (SelectRequest msg opts multi) = object
+    [ "type" .= ("select" :: Text)
+    , "message" .= msg
+    , "options" .= opts
+    , "multi" .= multi
+    ]
+
+-- | Standard response types for bidirectional communication
+data StandardResponse
+  = ConfirmedResponse Bool
+  | TextResponse Text
+  | SelectedResponse [Text]
+  | CancelledResponse
+  deriving (Show, Eq, Generic)
+
+instance FromJSON StandardResponse where
+  parseJSON = withObject "StandardResponse" $ \o -> do
+    typ <- o .: "type" :: Parser Text
+    case typ of
+      "confirmed" -> ConfirmedResponse <$> o .: "value"
+      "text" -> TextResponse <$> o .: "value"
+      "selected" -> SelectedResponse <$> o .: "values"
+      "cancelled" -> pure CancelledResponse
+      _ -> fail $ "Unknown response type: " <> T.unpack typ
+
+instance ToJSON StandardResponse where
+  toJSON (ConfirmedResponse val) = object
+    [ "type" .= ("confirmed" :: Text)
+    , "value" .= val
+    ]
+  toJSON (TextResponse val) = object
+    [ "type" .= ("text" :: Text)
+    , "value" .= val
+    ]
+  toJSON (SelectedResponse vals) = object
+    [ "type" .= ("selected" :: Text)
+    , "values" .= vals
+    ]
+  toJSON CancelledResponse = object
+    [ "type" .= ("cancelled" :: Text)
+    ]
+
+-- ============================================================================
 -- Plexus Stream Items
 -- ============================================================================
 
@@ -345,6 +447,13 @@ data PlexusStreamItem
       { itemPlexusHash :: Text
       , itemProvenance :: Provenance
       }
+  | StreamRequest
+      { itemPlexusHash  :: Text
+      , itemProvenance  :: Provenance
+      , itemRequestId   :: Text
+      , itemRequestData :: StandardRequest
+      , itemTimeoutMs   :: Int
+      }
   deriving stock (Show, Eq, Generic)
 
 instance FromJSON PlexusStreamItem where
@@ -378,6 +487,10 @@ instance FromJSON PlexusStreamItem where
             <$> o .: "message"
             <*> o .:? "recoverable" .!= False
           "done" -> pure $ StreamDone hash prov
+          "request" -> StreamRequest hash prov
+            <$> o .: "request_id"
+            <*> o .: "request"
+            <*> o .: "timeout_ms"
           _ -> fail $ "Unknown event type: " <> T.unpack typ
 
       -- Legacy format: flat structure
@@ -405,6 +518,11 @@ instance FromJSON PlexusStreamItem where
             <*> o .: "recoverable"
           "done" -> StreamDone hash
             <$> o .: "provenance"
+          "request" -> StreamRequest hash
+            <$> o .: "provenance"
+            <*> o .: "request_id"
+            <*> o .: "request"
+            <*> o .: "timeout_ms"
           _ -> fail $ "Unknown event type: " <> T.unpack typ
 
 instance ToJSON PlexusStreamItem where
@@ -438,6 +556,13 @@ instance ToJSON PlexusStreamItem where
   toJSON (StreamDone hash prov) = object
     [ "type" .= ("done" :: Text)
     , "metadata" .= StreamMetadata prov hash 0
+    ]
+  toJSON (StreamRequest hash prov reqId reqData timeout) = object
+    [ "type" .= ("request" :: Text)
+    , "metadata" .= StreamMetadata prov hash 0
+    , "request_id" .= reqId
+    , "request" .= reqData
+    , "timeout_ms" .= timeout
     ]
 
 -- | Create a subscription request
