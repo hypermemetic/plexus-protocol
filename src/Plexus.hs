@@ -52,6 +52,14 @@ module Plexus
   , rpcCallStreaming
   , invokeMethodStreaming
 
+    -- * Bidirectional Response
+  , sendBidirectionalResponse
+
+    -- * Bidirectional Types
+  , StandardRequest(..)
+  , StandardResponse(..)
+  , SelectOption(..)
+
     -- * Stream Types
   , PlexusStreamItem(..)
   , Provenance(..)

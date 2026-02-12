@@ -11,6 +11,9 @@ module Plexus.Transport
   , rpcCallStreaming
   , invokeMethodStreaming
 
+    -- * Bidirectional Response
+  , sendBidirectionalResponse
+
     -- * Schema Fetching
   , fetchSchemaAt
   , fetchMethodSchemaAt
@@ -31,7 +34,7 @@ import qualified Streaming.Prelude as S
 import qualified Network.Socket as NS
 
 import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
-import Plexus.Types (PlexusStreamItem(..), TransportError(..))
+import Plexus.Types (PlexusStreamItem(..), TransportError(..), StandardResponse(..))
 import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
 
 -- | Low-level RPC call with default localhost config
@@ -170,3 +173,19 @@ invokeRaw cfg method params = do
   let backend = substrateBackend cfg
   let callParams = object ["method" .= method, "params" .= params]
   rpcCallWith cfg (backend <> ".call") callParams
+
+-- | Send a response back to the server for a bidirectional request
+-- Uses {backend}.respond RPC method
+sendBidirectionalResponse :: SubstrateConfig -> Text -> StandardResponse -> IO (Either TransportError ())
+sendBidirectionalResponse cfg requestId response = do
+  let backend = substrateBackend cfg
+  let respondParams = object
+        [ "request_id" .= requestId
+        , "response" .= response
+        ]
+  result <- rpcCallWith cfg (backend <> ".respond") respondParams
+  case result of
+    Left transportErr -> pure $ Left transportErr
+    Right items -> case [err | StreamError _ _ err _ <- items] of
+      (err:_) -> pure $ Left $ ProtocolError err
+      [] -> pure $ Right ()
