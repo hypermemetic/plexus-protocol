@@ -23,6 +23,9 @@ module Plexus.Transport
     -- * Method Invocation (collected)
   , invokeMethod
   , invokeRaw
+
+    -- * Bidirectional Response
+  , sendBidirectionalResponse
   ) where
 
 import Control.Exception (SomeException, IOException, catch, fromException)
