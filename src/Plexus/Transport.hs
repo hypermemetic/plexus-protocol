@@ -20,6 +20,9 @@ module Plexus.Transport
     -- * Method Invocation (collected)
   , invokeMethod
   , invokeRaw
+
+    -- * Bidirectional Response
+  , sendBidirectionalResponse
   ) where
 
 import Control.Exception (SomeException, catch)
@@ -29,19 +32,19 @@ import qualified Data.Text as T
 import qualified Streaming.Prelude as S
 
 import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
-import Plexus.Types (PlexusStreamItem(..))
+import Plexus.Types (PlexusStreamItem(..), StandardResponse, TransportError(..))
 import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
 
 -- | Low-level RPC call with default localhost config
-rpcCall :: Text -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+rpcCall :: Text -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 rpcCall backend = rpcCallWith (defaultConfig backend)
 
 -- | Low-level RPC call with custom config
-rpcCallWith :: SubstrateConfig -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+rpcCallWith :: SubstrateConfig -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 rpcCallWith cfg method params = do
   result <- (Right <$> doCallInner cfg method params)
     `catch` \(e :: SomeException) ->
-      pure $ Left $ T.pack $ "Connection error: " <> show e
+      pure $ Left $ NetworkError $ T.pack $ "Connection error: " <> show e
   pure result
 
 doCallInner :: SubstrateConfig -> Text -> Value -> IO [PlexusStreamItem]
@@ -52,11 +55,11 @@ doCallInner cfg method params = do
   pure items
 
 -- | Streaming RPC call - invokes callback for each item as it arrives
-rpcCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either Text ())
+rpcCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
 rpcCallStreaming cfg method params onItem = do
   result <- (Right <$> doCallStreaming cfg method params onItem)
     `catch` \(e :: SomeException) ->
-      pure $ Left $ T.pack $ "Connection error: " <> show e
+      pure $ Left $ NetworkError $ T.pack $ "Connection error: " <> show e
   pure result
 
 doCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO ()
@@ -66,7 +69,7 @@ doCallStreaming cfg method params onItem = do
   disconnect conn
 
 -- | Streaming method invocation
-invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either Text ())
+invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
 invokeMethodStreaming cfg namespacePath method params onItem = do
   let backend = substrateBackend cfg
   let fullPath = if null namespacePath then [backend] else namespacePath
@@ -77,7 +80,7 @@ invokeMethodStreaming cfg namespacePath method params onItem = do
 -- | Fetch schema at a specific path
 -- Empty path = root (<backend>.schema)
 -- Non-empty path = child schema (e.g., ["solar", "earth"] -> solar.earth.schema)
-fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either Text PluginSchema)
+fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either TransportError PluginSchema)
 fetchSchemaAt cfg path = do
   let backend = substrateBackend cfg
   let schemaMethod = if null path
@@ -86,7 +89,9 @@ fetchSchemaAt cfg path = do
   result <- rpcCallWith cfg (backend <> ".call") (object ["method" .= schemaMethod])
   case result of
     Left err -> pure $ Left err
-    Right items -> pure $ extractSchema items
+    Right items -> case extractSchema items of
+      Left errMsg -> pure $ Left $ ProtocolError errMsg
+      Right schema -> pure $ Right schema
 
 -- | Extract PluginSchema from stream items
 extractSchema :: [PlexusStreamItem] -> Either Text PluginSchema
@@ -99,7 +104,7 @@ extractSchema items =
 
 -- | Fetch a specific method's schema
 -- Uses the parameter-based query: plugin.schema with {"method": "name"}
-fetchMethodSchemaAt :: SubstrateConfig -> [Text] -> Text -> IO (Either Text MethodSchema)
+fetchMethodSchemaAt :: SubstrateConfig -> [Text] -> Text -> IO (Either TransportError MethodSchema)
 fetchMethodSchemaAt cfg path methodName = do
   let backend = substrateBackend cfg
   let schemaMethod = if null path
@@ -112,9 +117,9 @@ fetchMethodSchemaAt cfg path methodName = do
   case result of
     Left err -> pure $ Left err
     Right items -> case extractSchemaResult items of
-      Left err -> pure $ Left err
+      Left err -> pure $ Left $ ProtocolError err
       Right (SchemaMethod m) -> pure $ Right m
-      Right (SchemaPlugin _) -> pure $ Left "Expected method schema, got plugin schema"
+      Right (SchemaPlugin _) -> pure $ Left $ ProtocolError "Expected method schema, got plugin schema"
 
 -- | Extract SchemaResult (plugin or method) from stream items
 extractSchemaResult :: [PlexusStreamItem] -> Either Text SchemaResult
@@ -126,7 +131,7 @@ extractSchemaResult items =
       [] -> Left "No schema in response"
 
 -- | Invoke a method and return stream items
-invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 invokeMethod cfg namespacePath method params = do
   let backend = substrateBackend cfg
   let fullPath = if null namespacePath then [backend] else namespacePath
@@ -135,8 +140,26 @@ invokeMethod cfg namespacePath method params = do
   rpcCallWith cfg (backend <> ".call") callParams
 
 -- | Invoke with raw method path
-invokeRaw :: SubstrateConfig -> Text -> Value -> IO (Either Text [PlexusStreamItem])
+invokeRaw :: SubstrateConfig -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 invokeRaw cfg method params = do
   let backend = substrateBackend cfg
   let callParams = object ["method" .= method, "params" .= params]
   rpcCallWith cfg (backend <> ".call") callParams
+
+-- | Send a bidirectional response back to the backend
+sendBidirectionalResponse :: SubstrateConfig -> Text -> StandardResponse -> IO (Either TransportError ())
+sendBidirectionalResponse cfg requestId response = do
+  let backend = substrateBackend cfg
+  let respondMethod = backend <> ".respond"
+  let params = object
+        [ "request_id" .= requestId
+        , "response" .= response
+        ]
+  result <- (Right <$> doCallInner cfg respondMethod params)
+    `catch` \(e :: SomeException) -> do
+      -- Parse the exception to create a proper TransportError
+      let errMsg = T.pack $ show e
+      pure $ Left $ NetworkError errMsg
+  case result of
+    Left err -> pure $ Left err
+    Right _ -> pure $ Right ()

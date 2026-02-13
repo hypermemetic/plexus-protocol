@@ -16,6 +16,14 @@ module Plexus.Types
   , GuidanceErrorType(..)
   , GuidanceSuggestion(..)
 
+    -- * Transport Errors
+  , TransportError(..)
+
+    -- * Bidirectional Request/Response Types
+  , StandardRequest(..)
+  , StandardResponse(..)
+  , SelectOption(..)
+
     -- * Helpers
   , mkSubscribeRequest
   , mkUnsubscribeRequest
@@ -274,6 +282,13 @@ data PlexusStreamItem
       , itemError       :: Text
       , itemRecoverable :: Bool
       }
+  | StreamRequest
+      { itemPlexusHash  :: Text
+      , itemProvenance  :: Provenance
+      , itemRequestId   :: Text
+      , itemRequestData :: StandardRequest
+      , itemTimeout     :: Maybe Int
+      }
   | StreamDone
       { itemPlexusHash :: Text
       , itemProvenance :: Provenance
@@ -310,6 +325,10 @@ instance FromJSON PlexusStreamItem where
           "error" -> StreamError hash prov
             <$> o .: "message"
             <*> o .:? "recoverable" .!= False
+          "request" -> StreamRequest hash prov
+            <$> o .: "request_id"
+            <*> o .: "request"
+            <*> o .:? "timeout"
           "done" -> pure $ StreamDone hash prov
           _ -> fail $ "Unknown event type: " <> T.unpack typ
 
@@ -336,6 +355,11 @@ instance FromJSON PlexusStreamItem where
             <$> o .: "provenance"
             <*> o .: "error"
             <*> o .: "recoverable"
+          "request" -> StreamRequest hash
+            <$> o .: "provenance"
+            <*> o .: "request_id"
+            <*> o .: "request"
+            <*> o .:? "timeout"
           "done" -> StreamDone hash
             <$> o .: "provenance"
           _ -> fail $ "Unknown event type: " <> T.unpack typ
@@ -368,6 +392,14 @@ instance ToJSON PlexusStreamItem where
     , "message" .= err
     , "recoverable" .= rec
     ]
+  toJSON (StreamRequest hash prov reqId reqData timeout) = object $
+    [ "type" .= ("request" :: Text)
+    , "metadata" .= StreamMetadata prov hash 0
+    , "request_id" .= reqId
+    , "request" .= reqData
+    ] <> catMaybes
+    [ ("timeout" .=) <$> timeout
+    ]
   toJSON (StreamDone hash prov) = object
     [ "type" .= ("done" :: Text)
     , "metadata" .= StreamMetadata prov hash 0
@@ -394,3 +426,138 @@ mkUnsubscribeRequest rid unsubMethod subId = RpcRequest
 -- | Extract the Plexus RPC hash from a stream item
 getPlexusHash :: PlexusStreamItem -> Text
 getPlexusHash = itemPlexusHash
+
+-- ============================================================================
+-- Transport Errors
+-- ============================================================================
+
+-- | Strongly-typed transport errors
+data TransportError
+  = ConnectionRefused
+      { transportErrorHost :: Text
+      , transportErrorPort :: Int
+      }
+  | ConnectionTimeout
+      { transportErrorHost :: Text
+      , transportErrorPort :: Int
+      }
+  | ProtocolError
+      { transportErrorMessage :: Text
+      }
+  | NetworkError
+      { transportErrorMessage :: Text
+      }
+  deriving stock (Show, Eq, Generic)
+
+-- ============================================================================
+-- Bidirectional Request/Response Types
+-- ============================================================================
+
+-- | Standard request types for bidirectional communication
+data StandardRequest
+  = ConfirmRequest
+      { confirmMessage :: Text
+      , confirmDefault :: Maybe Bool
+      }
+  | PromptRequest
+      { promptMessage     :: Text
+      , promptDefault     :: Maybe Text
+      , promptPlaceholder :: Maybe Text
+      }
+  | SelectRequest
+      { selectMessage :: Text
+      , selectOptions :: [SelectOption]
+      }
+  deriving stock (Show, Eq, Generic)
+
+instance FromJSON StandardRequest where
+  parseJSON = withObject "StandardRequest" $ \o -> do
+    typ <- o .: "type" :: Parser Text
+    case typ of
+      "confirm" -> ConfirmRequest
+        <$> o .: "message"
+        <*> o .:? "default"
+      "prompt" -> PromptRequest
+        <$> o .: "message"
+        <*> o .:? "default"
+        <*> o .:? "placeholder"
+      "select" -> SelectRequest
+        <$> o .: "message"
+        <*> o .: "options"
+      _ -> fail $ "Unknown request type: " <> T.unpack typ
+
+instance ToJSON StandardRequest where
+  toJSON (ConfirmRequest msg def) = object
+    [ "type" .= ("confirm" :: Text)
+    , "message" .= msg
+    , "default" .= def
+    ]
+  toJSON (PromptRequest msg def placeholder) = object $
+    [ "type" .= ("prompt" :: Text)
+    , "message" .= msg
+    ] <> catMaybes
+    [ ("default" .=) <$> def
+    , ("placeholder" .=) <$> placeholder
+    ]
+  toJSON (SelectRequest msg opts) = object
+    [ "type" .= ("select" :: Text)
+    , "message" .= msg
+    , "options" .= opts
+    ]
+
+-- | Standard response types for bidirectional communication
+data StandardResponse
+  = ConfirmedResponse Bool
+  | TextResponse Text
+  | SelectedResponse [Text]
+  | CancelledResponse
+  deriving stock (Show, Eq, Generic)
+
+instance FromJSON StandardResponse where
+  parseJSON = withObject "StandardResponse" $ \o -> do
+    typ <- o .: "type" :: Parser Text
+    case typ of
+      "confirmed" -> ConfirmedResponse <$> o .: "value"
+      "text" -> TextResponse <$> o .: "value"
+      "selected" -> SelectedResponse <$> o .: "values"
+      "cancelled" -> pure CancelledResponse
+      _ -> fail $ "Unknown response type: " <> T.unpack typ
+
+instance ToJSON StandardResponse where
+  toJSON (ConfirmedResponse b) = object
+    [ "type" .= ("confirmed" :: Text)
+    , "value" .= b
+    ]
+  toJSON (TextResponse t) = object
+    [ "type" .= ("text" :: Text)
+    , "value" .= t
+    ]
+  toJSON (SelectedResponse vals) = object
+    [ "type" .= ("selected" :: Text)
+    , "values" .= vals
+    ]
+  toJSON CancelledResponse = object
+    [ "type" .= ("cancelled" :: Text)
+    ]
+
+-- | Select option for select requests
+data SelectOption = SelectOption
+  { optionValue       :: Text
+  , optionLabel       :: Text
+  , optionDescription :: Maybe Text
+  }
+  deriving stock (Show, Eq, Generic)
+
+instance FromJSON SelectOption where
+  parseJSON = withObject "SelectOption" $ \o -> SelectOption
+    <$> o .: "value"
+    <*> o .: "label"
+    <*> o .:? "description"
+
+instance ToJSON SelectOption where
+  toJSON SelectOption{..} = object $
+    [ "value" .= optionValue
+    , "label" .= optionLabel
+    ] <> catMaybes
+    [ ("description" .=) <$> optionDescription
+    ]
