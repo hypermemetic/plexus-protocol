@@ -87,12 +87,15 @@ instance ToJSON ChildSummary where
 
 -- | Schema for a single method
 data MethodSchema = MethodSchema
-  { methodName        :: Text
-  , methodDescription :: Text
-  , methodHash        :: PluginHash
-  , methodParams      :: Maybe Value  -- ^ JSON Schema for params
-  , methodReturns     :: Maybe Value  -- ^ JSON Schema for return events
-  , methodStreaming   :: Bool         -- ^ True if method streams multiple events
+  { methodName            :: Text
+  , methodDescription     :: Text
+  , methodHash            :: PluginHash
+  , methodParams          :: Maybe Value  -- ^ JSON Schema for params
+  , methodReturns         :: Maybe Value  -- ^ JSON Schema for return events
+  , methodStreaming        :: Bool         -- ^ True if method streams multiple events
+  , methodBidirectional   :: Bool         -- ^ True if method uses a bidirectional channel
+  , methodRequestType     :: Maybe Value  -- ^ JSON Schema for the server→client request type (when bidirectional)
+  , methodResponseType    :: Maybe Value  -- ^ JSON Schema for the client→server response type (when bidirectional)
   }
   deriving stock (Show, Eq, Generic)
 
@@ -103,16 +106,22 @@ instance FromJSON MethodSchema where
     <*> o .: "hash"
     <*> o .:? "params"
     <*> o .:? "returns"
-    <*> o .:? "streaming" .!= False
+    <*> o .:? "streaming"      .!= False
+    <*> o .:? "bidirectional"  .!= False
+    <*> o .:? "request_type"
+    <*> o .:? "response_type"
 
 instance ToJSON MethodSchema where
   toJSON MethodSchema{..} = object
-    [ "name"        .= methodName
-    , "description" .= methodDescription
-    , "hash"        .= methodHash
-    , "params"      .= methodParams
-    , "returns"     .= methodReturns
-    , "streaming"   .= methodStreaming
+    [ "name"           .= methodName
+    , "description"    .= methodDescription
+    , "hash"           .= methodHash
+    , "params"         .= methodParams
+    , "returns"        .= methodReturns
+    , "streaming"      .= methodStreaming
+    , "bidirectional"  .= methodBidirectional
+    , "request_type"   .= methodRequestType
+    , "response_type"  .= methodResponseType
     ]
 
 -- | Shallow plugin schema (what we receive from {backend}.schema)
