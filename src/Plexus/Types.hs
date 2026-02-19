@@ -19,8 +19,10 @@ module Plexus.Types
 
     -- * Bidirectional Types
   , SelectOption(..)
-  , StandardRequest(..)
-  , StandardResponse(..)
+  , Request(..)
+  , StandardRequest
+  , Response(..)
+  , StandardResponse
 
     -- * Helpers
   , mkSubscribeRequest
@@ -29,7 +31,6 @@ module Plexus.Types
   ) where
 
 import Data.Aeson
-import Data.Aeson.Casing (snakeCase)
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (catMaybes)
@@ -316,97 +317,98 @@ instance FromJSON TransportError where
 -- Bidirectional Types (Request/Response)
 -- ============================================================================
 
--- | Option for select requests
-data SelectOption = SelectOption
-  { optionValue       :: Text
+-- | Option for select requests, parameterized over value type
+data SelectOption t = SelectOption
+  { optionValue       :: t
   , optionLabel       :: Text
   , optionDescription :: Maybe Text
   }
   deriving (Show, Eq, Generic)
 
-instance FromJSON SelectOption where
-  parseJSON = genericParseJSON defaultOptions { fieldLabelModifier = snakeCase . drop 6 }
+instance (FromJSON t) => FromJSON (SelectOption t) where
+  parseJSON = withObject "SelectOption" $ \o -> SelectOption
+    <$> o .: "value"
+    <*> o .: "label"
+    <*> o .:? "description"
 
-instance ToJSON SelectOption where
-  toJSON = genericToJSON defaultOptions { fieldLabelModifier = snakeCase . drop 6 }
+instance (ToJSON t) => ToJSON (SelectOption t) where
+  toJSON SelectOption{..} = object $
+    [ "value" .= optionValue, "label" .= optionLabel ]
+    <> catMaybes [("description" .=) <$> optionDescription]
 
--- | Standard request types for bidirectional communication
-data StandardRequest
-  = ConfirmRequest { confirmMessage :: Text, confirmDefault :: Maybe Bool }
-  | PromptRequest { promptMessage :: Text, promptDefault :: Maybe Text, promptPlaceholder :: Maybe Text }
-  | SelectRequest { selectMessage :: Text, selectOptions :: [SelectOption], selectMulti :: Bool }
+-- | Parameterized request type for bidirectional communication
+data Request t
+  = Confirm  { confirmMessage :: Text, confirmDefault :: Maybe Bool }
+  | Prompt   { promptMessage :: Text, promptDefault :: Maybe t, promptPlaceholder :: Maybe Text }
+  | Select   { selectMessage :: Text, selectOptions :: [SelectOption t], selectMulti :: Bool }
+  | CustomRequest { customRequestData :: t }
   deriving (Show, Eq, Generic)
 
-instance FromJSON StandardRequest where
-  parseJSON = withObject "StandardRequest" $ \o -> do
+-- | Type alias for backwards compatibility: requests with JSON values
+type StandardRequest = Request Value
+
+instance (FromJSON t) => FromJSON (Request t) where
+  parseJSON = withObject "Request" $ \o -> do
     typ <- o .: "type" :: Parser Text
     case typ of
-      "confirm" -> ConfirmRequest
+      "confirm" -> Confirm
         <$> o .: "message"
         <*> o .:? "default"
-      "prompt" -> PromptRequest
+      "prompt" -> Prompt
         <$> o .: "message"
         <*> o .:? "default"
         <*> o .:? "placeholder"
-      "select" -> SelectRequest
+      "select" -> Select
         <$> o .: "message"
         <*> o .: "options"
-        <*> o .:? "multi" .!= False
+        <*> o .:? "multi_select" .!= False
+      "custom" -> CustomRequest <$> o .: "data"
       _ -> fail $ "Unknown request type: " <> T.unpack typ
 
-instance ToJSON StandardRequest where
-  toJSON (ConfirmRequest msg def) = object $
-    [ "type" .= ("confirm" :: Text)
-    , "message" .= msg
-    ] <> catMaybes [("default" .=) <$> def]
-  toJSON (PromptRequest msg def placeholder) = object $
-    [ "type" .= ("prompt" :: Text)
-    , "message" .= msg
-    ] <> catMaybes
-    [ ("default" .=) <$> def
-    , ("placeholder" .=) <$> placeholder
-    ]
-  toJSON (SelectRequest msg opts multi) = object
-    [ "type" .= ("select" :: Text)
-    , "message" .= msg
-    , "options" .= opts
-    , "multi" .= multi
-    ]
+instance (ToJSON t) => ToJSON (Request t) where
+  toJSON (Confirm msg def) = object $
+    [ "type" .= ("confirm" :: Text), "message" .= msg ]
+    <> catMaybes [("default" .=) <$> def]
+  toJSON (Prompt msg def placeholder) = object $
+    [ "type" .= ("prompt" :: Text), "message" .= msg ]
+    <> catMaybes [("default" .=) <$> def, ("placeholder" .=) <$> placeholder]
+  toJSON (Select msg opts multi) = object
+    [ "type" .= ("select" :: Text), "message" .= msg
+    , "options" .= opts, "multi_select" .= multi ]
+  toJSON (CustomRequest d) = object ["type" .= ("custom" :: Text), "data" .= d]
 
--- | Standard response types for bidirectional communication
-data StandardResponse
-  = ConfirmedResponse Bool
-  | TextResponse Text
-  | SelectedResponse [Text]
-  | CancelledResponse
+-- | Parameterized response type for bidirectional communication
+--
+-- Note: The 'Value' constructor corresponds to JSON @"type":"text"@ for
+-- wire compatibility with the Rust implementation.
+data Response t
+  = Confirmed { confirmedValue :: Bool }
+  | Value     { responseValue :: t }    -- ^ wire tag: "text"
+  | Selected  { selectedValues :: [t] }
+  | CustomResponse { customResponseData :: t }
+  | Cancelled
   deriving (Show, Eq, Generic)
 
-instance FromJSON StandardResponse where
-  parseJSON = withObject "StandardResponse" $ \o -> do
+-- | Type alias for backwards compatibility: responses with JSON values
+type StandardResponse = Response Value
+
+instance (FromJSON t) => FromJSON (Response t) where
+  parseJSON = withObject "Response" $ \o -> do
     typ <- o .: "type" :: Parser Text
     case typ of
-      "confirmed" -> ConfirmedResponse <$> o .: "value"
-      "text" -> TextResponse <$> o .: "value"
-      "selected" -> SelectedResponse <$> o .: "values"
-      "cancelled" -> pure CancelledResponse
+      "confirmed" -> Confirmed <$> o .: "value"
+      "text"      -> Value <$> o .: "value"
+      "selected"  -> Selected <$> o .: "values"
+      "custom"    -> CustomResponse <$> o .: "data"
+      "cancelled" -> pure Cancelled
       _ -> fail $ "Unknown response type: " <> T.unpack typ
 
-instance ToJSON StandardResponse where
-  toJSON (ConfirmedResponse val) = object
-    [ "type" .= ("confirmed" :: Text)
-    , "value" .= val
-    ]
-  toJSON (TextResponse val) = object
-    [ "type" .= ("text" :: Text)
-    , "value" .= val
-    ]
-  toJSON (SelectedResponse vals) = object
-    [ "type" .= ("selected" :: Text)
-    , "values" .= vals
-    ]
-  toJSON CancelledResponse = object
-    [ "type" .= ("cancelled" :: Text)
-    ]
+instance (ToJSON t) => ToJSON (Response t) where
+  toJSON (Confirmed v)       = object ["type" .= ("confirmed" :: Text), "value" .= v]
+  toJSON (Value v)           = object ["type" .= ("text" :: Text), "value" .= v]
+  toJSON (Selected vs)       = object ["type" .= ("selected" :: Text), "values" .= vs]
+  toJSON (CustomResponse d)  = object ["type" .= ("custom" :: Text), "data" .= d]
+  toJSON Cancelled           = object ["type" .= ("cancelled" :: Text)]
 
 -- ============================================================================
 -- Plexus Stream Items
@@ -451,7 +453,7 @@ data PlexusStreamItem
       { itemPlexusHash  :: Text
       , itemProvenance  :: Provenance
       , itemRequestId   :: Text
-      , itemRequestData :: StandardRequest
+      , itemRequestData :: Request Value
       , itemTimeoutMs   :: Int
       }
   deriving stock (Show, Eq, Generic)

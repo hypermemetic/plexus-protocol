@@ -34,7 +34,7 @@ import qualified Streaming.Prelude as S
 import qualified Network.Socket as NS
 
 import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
-import Plexus.Types (PlexusStreamItem(..), TransportError(..), StandardResponse(..))
+import Plexus.Types (PlexusStreamItem(..), TransportError(..), Response(..), StandardResponse)
 import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
 
 -- | Low-level RPC call with default localhost config
@@ -176,7 +176,7 @@ invokeRaw cfg method params = do
 
 -- | Send a response back to the server for a bidirectional request
 -- Uses {backend}.respond RPC method
-sendBidirectionalResponse :: SubstrateConfig -> Text -> StandardResponse -> IO (Either TransportError ())
+sendBidirectionalResponse :: SubstrateConfig -> Text -> Response Value -> IO (Either TransportError ())
 sendBidirectionalResponse cfg requestId response = do
   let backend = substrateBackend cfg
   let respondParams = object
