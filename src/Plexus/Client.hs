@@ -28,6 +28,7 @@ import Control.Exception (SomeException, catch)
 import Control.Monad (forever, void)
 import Data.Aeson
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.IORef
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
