@@ -20,9 +20,11 @@ module Plexus.Types
     -- * Bidirectional Types
   , SelectOption(..)
   , Request(..)
-  , StandardRequest
   , Response(..)
-  , StandardResponse
+  , WellKnownRequest
+  , WellKnownResponse
+  , StandardRequest  -- Deprecated, kept for backwards compatibility
+  , StandardResponse -- Deprecated, kept for backwards compatibility
 
     -- * Helpers
   , mkSubscribeRequest
@@ -337,14 +339,28 @@ instance (ToJSON t) => ToJSON (SelectOption t) where
     <> catMaybes [("description" .=) <$> optionDescription]
 
 -- | Parameterized request type for bidirectional communication
+--
+-- This type represents the well-known request types in the Plexus bidirectional protocol.
+-- Unlike Rust which uses traits, Haskell uses a parameterized ADT which provides
+-- similar flexibility with better type safety.
+--
+-- The type parameter @t@ is used for values in Prompt defaults and Select options.
+-- For most cases, use 'WellKnownRequest' which sets @t = Value@.
 data Request t
   = Confirm  { confirmMessage :: Text, confirmDefault :: Maybe Bool }
   | Prompt   { promptMessage :: Text, promptDefault :: Maybe t, promptPlaceholder :: Maybe Text }
   | Select   { selectMessage :: Text, selectOptions :: [SelectOption t], selectMulti :: Bool }
-  | CustomRequest { customRequestData :: t }
   deriving (Show, Eq, Generic)
 
+-- | Well-known request types with JSON values
+--
+-- This is the recommended type for most bidirectional requests.
+-- It matches the Rust @WellKnownRequest@ and TypeScript union types.
+type WellKnownRequest = Request Value
+
 -- | Type alias for backwards compatibility: requests with JSON values
+--
+-- Deprecated: Use 'WellKnownRequest' instead for consistency with Rust/TypeScript.
 type StandardRequest = Request Value
 
 instance (FromJSON t) => FromJSON (Request t) where
@@ -362,7 +378,6 @@ instance (FromJSON t) => FromJSON (Request t) where
         <$> o .: "message"
         <*> o .: "options"
         <*> o .:? "multi_select" .!= False
-      "custom" -> CustomRequest <$> o .: "data"
       _ -> fail $ "Unknown request type: " <> T.unpack typ
 
 instance (ToJSON t) => ToJSON (Request t) where
@@ -375,21 +390,32 @@ instance (ToJSON t) => ToJSON (Request t) where
   toJSON (Select msg opts multi) = object
     [ "type" .= ("select" :: Text), "message" .= msg
     , "options" .= opts, "multi_select" .= multi ]
-  toJSON (CustomRequest d) = object ["type" .= ("custom" :: Text), "data" .= d]
 
 -- | Parameterized response type for bidirectional communication
 --
+-- This type represents the well-known response types in the Plexus bidirectional protocol.
+--
 -- Note: The 'Value' constructor corresponds to JSON @"type":"text"@ for
 -- wire compatibility with the Rust implementation.
+--
+-- The type parameter @t@ is used for values in Prompt responses and Select responses.
+-- For most cases, use 'WellKnownResponse' which sets @t = Value@.
 data Response t
   = Confirmed { confirmedValue :: Bool }
   | Value     { responseValue :: t }    -- ^ wire tag: "text"
   | Selected  { selectedValues :: [t] }
-  | CustomResponse { customResponseData :: t }
   | Cancelled
   deriving (Show, Eq, Generic)
 
+-- | Well-known response types with JSON values
+--
+-- This is the recommended type for most bidirectional responses.
+-- It matches the Rust @WellKnownResponse@ and TypeScript union types.
+type WellKnownResponse = Response Value
+
 -- | Type alias for backwards compatibility: responses with JSON values
+--
+-- Deprecated: Use 'WellKnownResponse' instead for consistency with Rust/TypeScript.
 type StandardResponse = Response Value
 
 instance (FromJSON t) => FromJSON (Response t) where
@@ -399,16 +425,14 @@ instance (FromJSON t) => FromJSON (Response t) where
       "confirmed" -> Confirmed <$> o .: "value"
       "text"      -> Value <$> o .: "value"
       "selected"  -> Selected <$> o .: "values"
-      "custom"    -> CustomResponse <$> o .: "data"
       "cancelled" -> pure Cancelled
       _ -> fail $ "Unknown response type: " <> T.unpack typ
 
 instance (ToJSON t) => ToJSON (Response t) where
-  toJSON (Confirmed v)       = object ["type" .= ("confirmed" :: Text), "value" .= v]
-  toJSON (Value v)           = object ["type" .= ("text" :: Text), "value" .= v]
-  toJSON (Selected vs)       = object ["type" .= ("selected" :: Text), "values" .= vs]
-  toJSON (CustomResponse d)  = object ["type" .= ("custom" :: Text), "data" .= d]
-  toJSON Cancelled           = object ["type" .= ("cancelled" :: Text)]
+  toJSON (Confirmed v)  = object ["type" .= ("confirmed" :: Text), "value" .= v]
+  toJSON (Value v)      = object ["type" .= ("text" :: Text), "value" .= v]
+  toJSON (Selected vs)  = object ["type" .= ("selected" :: Text), "values" .= vs]
+  toJSON Cancelled      = object ["type" .= ("cancelled" :: Text)]
 
 -- ============================================================================
 -- Plexus Stream Items
