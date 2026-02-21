@@ -21,11 +21,12 @@ module Plexus.Client
   , defaultConfig
   ) where
 
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (Async, async, cancel, wait)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, catch)
 import Control.Monad (forever, void)
+import System.Timeout (timeout)
 import Data.Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -97,12 +98,11 @@ connect SubstrateConfig{..} = do
       -- Signal failure (don't print, just capture)
       atomically $ putTMVar resultVar (Left $ show e)
 
-  -- Wait for connection result (with timeout)
-  threadDelay 200000  -- 200ms
-  mResult <- atomically $ tryTakeTMVar resultVar
+  -- Wait for connection result (with 5s timeout instead of hardcoded 200ms sleep)
+  mResult <- timeout 5000000 $ atomically $ takeTMVar resultVar
 
   case mResult of
-    Nothing -> error "Connection timeout"
+    Nothing -> error "Connection timeout (5s)"
     Just (Left err) -> error $ "Connection failed: " <> err
     Just (Right (conn, reader)) ->
       pure SubstrateConnection
