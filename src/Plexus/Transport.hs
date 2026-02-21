@@ -27,15 +27,35 @@ module Plexus.Transport
 
 import Control.Exception (SomeException, IOException, catch, fromException)
 import qualified Control.Exception as E
+import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
 import Data.Aeson hiding (Error)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Streaming.Prelude as S
 import qualified Network.Socket as NS
+import System.IO.Unsafe (unsafePerformIO)
 
 import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
+import Plexus.Client.Pool (ConnectionPool, createConnectionPool, withPooledConnection, defaultPlexusPoolConfig)
 import Plexus.Types (PlexusStreamItem(..), TransportError(..), Response(..), StandardResponse)
 import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
+
+-- | Global connection pool cache
+-- One pool per unique SubstrateConfig to enable connection reuse across calls
+{-# NOINLINE poolCache #-}
+poolCache :: MVar (Map SubstrateConfig ConnectionPool)
+poolCache = unsafePerformIO (newMVar Map.empty)
+
+-- | Get or create a connection pool for the given config
+getOrCreatePool :: SubstrateConfig -> IO ConnectionPool
+getOrCreatePool cfg = modifyMVar poolCache $ \pools ->
+  case Map.lookup cfg pools of
+    Just pool -> pure (pools, pool)
+    Nothing -> do
+      pool <- createConnectionPool cfg defaultPlexusPoolConfig
+      pure (Map.insert cfg pool pools, pool)
 
 -- | Low-level RPC call with default localhost config
 rpcCall :: Text -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
@@ -77,10 +97,9 @@ categorizeException cfg e
 
 doCallInner :: SubstrateConfig -> Text -> Value -> IO [PlexusStreamItem]
 doCallInner cfg method params = do
-  conn <- connect cfg
-  items <- S.toList_ $ substrateRpc conn method params
-  disconnect conn
-  pure items
+  pool <- getOrCreatePool cfg
+  withPooledConnection pool $ \conn ->
+    S.toList_ $ substrateRpc conn method params
 
 -- | Streaming RPC call - invokes callback for each item as it arrives
 rpcCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
@@ -91,9 +110,9 @@ rpcCallStreaming cfg method params onItem = do
 
 doCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO ()
 doCallStreaming cfg method params onItem = do
-  conn <- connect cfg
-  S.mapM_ onItem $ substrateRpc conn method params
-  disconnect conn
+  pool <- getOrCreatePool cfg
+  withPooledConnection pool $ \conn ->
+    S.mapM_ onItem $ substrateRpc conn method params
 
 -- | Streaming method invocation
 invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
@@ -181,7 +200,7 @@ sendBidirectionalResponse cfg requestId response = do
   let backend = substrateBackend cfg
   let respondParams = object
         [ "request_id" .= requestId
-        , "response" .= response
+        , "response_data" .= response
         ]
   result <- rpcCallWith cfg (backend <> ".respond") respondParams
   case result of

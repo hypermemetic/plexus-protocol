@@ -48,7 +48,7 @@ data SubstrateConfig = SubstrateConfig
   , substratePath    :: String
   , substrateBackend :: Text    -- ^ Backend name (e.g., "plexus")
   }
-  deriving stock (Show, Eq)
+  deriving stock (Show, Eq, Ord)
 
 -- | Default configuration for local development (requires backend)
 defaultConfig :: Text -> SubstrateConfig
