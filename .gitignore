@@ -1,8 +1,106 @@
+# === Haskell ===
 dist-newstyle/
+dist/
+.cabal-sandbox/
+cabal.sandbox.config
+cabal.project.local
+cabal.project.local~
+.ghc.environment.*
 *.hi
 *.o
 *.dyn_hi
 *.dyn_o
-.ghc.environment.*
-cabal.project.local
+*.chi
+*.chs.h
+*.hp
+*.prof
+*.tix
+.hpc/
+.hsenv/
+.stack-work/
+
+# === Rust ===
+target/
+Cargo.lock
+*.rlib
+*.rmeta
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+.venv/
+venv/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# === Node / JS / TS ===
+node_modules/
+.npm/
+*.tsbuildinfo
+.next/
+.nuxt/
+.turbo/
+
+# === Go ===
+*.exe
+*.exe~
+*.test
+*.out
+
+# === Java / JVM ===
+*.class
+*.jar
+*.war
+*.ear
+.gradle/
+build/
+
+# === C / C++ ===
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.obj
+
+# === Editors / IDEs ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.vs/
+
+# === OS files ===
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+._*
+
+# === Environment / secrets ===
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# === Misc ===
+*.log
+*.bak
+*.tmp
+*.temp
+.cache/
