@@ -24,14 +24,6 @@ module Plexus.Types
   , Response(..)
   , StandardResponse
 
-    -- * Transport Errors
-  , TransportError(..)
-
-    -- * Bidirectional Request/Response Types
-  , StandardRequest(..)
-  , StandardResponse(..)
-  , SelectOption(..)
-
     -- * Helpers
   , mkSubscribeRequest
   , mkUnsubscribeRequest
@@ -464,13 +456,6 @@ data PlexusStreamItem
       { itemPlexusHash :: Text
       , itemProvenance :: Provenance
       }
-  | StreamRequest
-      { itemPlexusHash  :: Text
-      , itemProvenance  :: Provenance
-      , itemRequestId   :: Text
-      , itemRequestData :: Request Value
-      , itemTimeoutMs   :: Int
-      }
   deriving stock (Show, Eq, Generic)
 
 instance FromJSON PlexusStreamItem where
@@ -508,10 +493,6 @@ instance FromJSON PlexusStreamItem where
             <*> o .: "request"
             <*> o .:? "timeout"
           "done" -> pure $ StreamDone hash prov
-          "request" -> StreamRequest hash prov
-            <$> o .: "request_id"
-            <*> o .: "request"
-            <*> o .: "timeout_ms"
           _ -> fail $ "Unknown event type: " <> T.unpack typ
 
       -- Legacy format: flat structure
@@ -544,11 +525,6 @@ instance FromJSON PlexusStreamItem where
             <*> o .:? "timeout"
           "done" -> StreamDone hash
             <$> o .: "provenance"
-          "request" -> StreamRequest hash
-            <$> o .: "provenance"
-            <*> o .: "request_id"
-            <*> o .: "request"
-            <*> o .: "timeout_ms"
           _ -> fail $ "Unknown event type: " <> T.unpack typ
 
 instance ToJSON PlexusStreamItem where
@@ -590,13 +566,6 @@ instance ToJSON PlexusStreamItem where
   toJSON (StreamDone hash prov) = object
     [ "type" .= ("done" :: Text)
     , "metadata" .= StreamMetadata prov hash 0
-    ]
-  toJSON (StreamRequest hash prov reqId reqData timeout) = object
-    [ "type" .= ("request" :: Text)
-    , "metadata" .= StreamMetadata prov hash 0
-    , "request_id" .= reqId
-    , "request" .= reqData
-    , "timeout_ms" .= timeout
     ]
 
 -- | Create a subscription request
