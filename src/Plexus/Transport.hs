@@ -118,20 +118,20 @@ doCallStreaming cfg method params onItem = do
 invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
 invokeMethodStreaming cfg namespacePath method params onItem = do
   let backend = substrateBackend cfg
-  let fullPath = if null namespacePath then [backend] else namespacePath
+  let fullPath = if null namespacePath then [backend] else (backend : namespacePath)
   let dotPath = T.intercalate "." (fullPath ++ [method])
   let callParams = object ["method" .= dotPath, "params" .= params]
   rpcCallStreaming cfg (backend <> ".call") callParams onItem
 
 -- | Fetch schema at a specific path
 -- Empty path = root (<backend>.schema)
--- Non-empty path = child schema (e.g., ["solar", "earth"] -> solar.earth.schema)
+-- Non-empty path = child schema (e.g., ["solar", "earth"] -> <backend>.solar.earth.schema)
 fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either TransportError PluginSchema)
 fetchSchemaAt cfg path = do
   let backend = substrateBackend cfg
   let schemaMethod = if null path
         then backend <> ".schema"
-        else T.intercalate "." path <> ".schema"
+        else backend <> "." <> T.intercalate "." path <> ".schema"
   result <- rpcCallWith cfg (backend <> ".call") (object ["method" .= schemaMethod])
   case result of
     Left transportErr -> pure $ Left transportErr
@@ -156,7 +156,7 @@ fetchMethodSchemaAt cfg path methodName = do
   let backend = substrateBackend cfg
   let schemaMethod = if null path
         then backend <> ".schema"
-        else T.intercalate "." path <> ".schema"
+        else backend <> "." <> T.intercalate "." path <> ".schema"
   result <- rpcCallWith cfg (backend <> ".call") (object
     [ "method" .= schemaMethod
     , "params" .= object ["method" .= methodName]
@@ -181,7 +181,7 @@ extractSchemaResult items =
 invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value -> IO (Either TransportError [PlexusStreamItem])
 invokeMethod cfg namespacePath method params = do
   let backend = substrateBackend cfg
-  let fullPath = if null namespacePath then [backend] else namespacePath
+  let fullPath = if null namespacePath then [backend] else (backend : namespacePath)
   let dotPath = T.intercalate "." (fullPath ++ [method])
   let callParams = object ["method" .= dotPath, "params" .= params]
   rpcCallWith cfg (backend <> ".call") callParams
