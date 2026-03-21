@@ -218,8 +218,14 @@ substrateRpc conn method params = do
   let req = mkSubscribeRequest rid method params
   liftIO $ WS.sendTextData (scConnection conn) (encode req)
 
-  -- Wait for subscription confirmation
-  resp <- liftIO $ atomically $ takeTMVar respVar
+  -- Wait for subscription confirmation (with timeout to prevent deadlock)
+  mResp <- liftIO $ timeout 30000000 $ atomically $ takeTMVar respVar
+  resp <- case mResp of
+    Nothing -> do
+      -- Clean up on timeout
+      liftIO $ atomically $ modifyTVar' (scPendingReqs conn) $ Map.delete rid
+      error $ "RPC subscription timeout: method=" <> T.unpack method
+    Just r -> pure r
 
   -- Clean up pending request
   liftIO $ atomically $ modifyTVar' (scPendingReqs conn) $ Map.delete rid
