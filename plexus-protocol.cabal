@@ -19,6 +19,7 @@ library
     Plexus.Schema.Recursive
   build-depends:
     base ^>=4.17 || ^>=4.18 || ^>=4.19,
+    synapse-types,
     aeson >= 2.0,
     aeson-casing >= 0.2,
     text >= 2.0,
@@ -32,7 +33,8 @@ library
     directory >= 1.3,
     filepath >= 1.4,
     time >= 1.9,
-    resource-pool >= 0.4
+    resource-pool >= 0.4,
+    refined >= 0.8
   hs-source-dirs:   src
   default-language: GHC2021
   default-extensions:
@@ -43,3 +45,18 @@ library
     GeneralizedNewtypeDeriving
     LambdaCase
     RecordWildCards
+
+test-suite plexus-protocol-validation-bugs
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Main.hs
+  other-modules:    CurrentBugsSpec
+  build-depends:    base >= 4.17
+                  , plexus-protocol
+                  , hspec >= 2.10
+                  , aeson >= 2.0
+                  , text >= 2.0
+                  , bytestring >= 0.11
+  default-language: GHC2021
+  default-extensions: OverloadedStrings
+                    , RecordWildCards

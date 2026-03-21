@@ -35,11 +35,19 @@ module Plexus.Types
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Int (Int64)
+import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as NE
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import GHC.Generics (Generic)
+import Refined (unrefine)
+
+-- Validated types from synapse-types
+import qualified Synapse.Types.Protocol as Validated
+import qualified Synapse.Types.Refined as Validated
 
 -- | Request ID for JSON-RPC calls
 newtype RequestId = RequestId { unRequestId :: Int }
@@ -138,33 +146,53 @@ instance FromJSON SubNotifParams where
 
 -- | Provenance tracking nested calls through activations
 -- Now just a list of namespace segments (no wrapper object)
+-- Matches plexus-core's Provenance type (allows empty for Done events)
 newtype Provenance = Provenance { segments :: [Text] }
   deriving stock (Show, Eq, Generic)
 
 instance FromJSON Provenance where
   parseJSON v = case v of
     -- New format: just an array ["plexus", "echo"]
-    Array arr -> Provenance <$> mapM parseJSON (foldr (:) [] arr)
+    Array arr -> do
+      segs <- mapM parseJSON (foldr (:) [] arr)
+      pure $ Provenance segs  -- Allow empty provenance (matches Rust)
     -- Legacy format: {"segments": [...]}
-    Object o -> Provenance <$> o .: "segments"
+    Object o -> do
+      segs <- o .: "segments"
+      pure $ Provenance segs  -- Allow empty provenance
     _ -> fail "Provenance: expected array or object"
 
 instance ToJSON Provenance where
   toJSON (Provenance segs) = toJSON segs
 
 -- | Metadata wrapper for stream results
+-- VALIDATED: All fields are validated using synapse-types
 data StreamMetadata = StreamMetadata
   { metaProvenance :: Provenance
-  , metaPlexusHash :: Text
-  , metaTimestamp  :: Integer
+  , metaPlexusHash :: Text        -- Validated: exactly 16 lowercase hex chars
+  , metaTimestamp  :: Integer     -- Validated: positive integer
   }
   deriving stock (Show, Eq, Generic)
 
 instance FromJSON StreamMetadata where
-  parseJSON = withObject "StreamMetadata" $ \o -> StreamMetadata
-    <$> o .: "provenance"
-    <*> o .: "plexus_hash"
-    <*> o .: "timestamp"
+  parseJSON = withObject "StreamMetadata" $ \o -> do
+    prov <- o .: "provenance"
+    hashText <- o .: "plexus_hash"
+    tsValue <- o .: "timestamp"
+
+    -- Validate hash using synapse-types
+    case Validated.mkPlexusHash hashText of
+      Left err -> fail $ "Invalid plexus_hash: " <> show err
+      Right validHash -> do
+        -- Validate timestamp using synapse-types
+        case Validated.mkTimestamp tsValue of
+          Left err -> fail $ "Invalid timestamp: " <> show err
+          Right validTs ->
+            pure $ StreamMetadata
+              { metaProvenance = prov
+              , metaPlexusHash = unrefine validHash  -- Extract validated Text
+              , metaTimestamp = fromIntegral (unrefine validTs :: Int64)  -- Convert Int64 to Integer
+              }
 
 instance ToJSON StreamMetadata where
   toJSON StreamMetadata{..} = object
@@ -498,9 +526,17 @@ instance FromJSON PlexusStreamItem where
         let hash = metaPlexusHash meta
             prov = metaProvenance meta
         case typ of
-          "progress" -> StreamProgress hash prov
-            <$> o .: "message"
-            <*> o .:? "percentage"
+          "progress" -> do
+            msg <- o .: "message"
+            mPct <- o .:? "percentage" :: Parser (Maybe Double)
+            -- Validate percentage if present
+            case mPct of
+              Nothing -> pure $ StreamProgress hash prov msg Nothing
+              Just pctDouble -> do
+                let pctInt = round pctDouble :: Int
+                case Validated.mkPercentage pctInt of
+                  Left err -> fail $ "Invalid percentage: " <> show err <> " (must be 0-100)"
+                  Right _ -> pure $ StreamProgress hash prov msg (Just pctDouble)
           "data" -> StreamData hash prov
             <$> o .: "content_type"
             <*> o .: "content"
@@ -522,12 +558,25 @@ instance FromJSON PlexusStreamItem where
       -- Legacy format: flat structure
       parseLegacy :: Text -> Object -> Parser PlexusStreamItem
       parseLegacy typ o = do
-        hash <- o .: "plexus_hash"
+        hashText <- o .: "plexus_hash"
+        -- Validate hash
+        hash <- case Validated.mkPlexusHash hashText of
+          Left err -> fail $ "Invalid plexus_hash: " <> show err
+          Right validHash -> pure $ unrefine validHash
+
         case typ of
-          "progress" -> StreamProgress hash
-            <$> o .: "provenance"
-            <*> o .: "message"
-            <*> o .:? "percentage"
+          "progress" -> do
+            prov <- o .: "provenance"
+            msg <- o .: "message"
+            mPct <- o .:? "percentage" :: Parser (Maybe Double)
+            -- Validate percentage if present
+            case mPct of
+              Nothing -> pure $ StreamProgress hash prov msg Nothing
+              Just pctDouble -> do
+                let pctInt = round pctDouble :: Int
+                case Validated.mkPercentage pctInt of
+                  Left err -> fail $ "Invalid percentage: " <> show err <> " (must be 0-100)"
+                  Right _ -> pure $ StreamProgress hash prov msg (Just pctDouble)
           "data" -> StreamData hash
             <$> o .: "provenance"
             <*> o .: "content_type"
