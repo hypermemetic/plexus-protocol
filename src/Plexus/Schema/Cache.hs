@@ -1,6 +1,22 @@
 -- | Schema caching for the dynamic CLI
 --
 -- Caches the PlexusSchema and enriched schemas to disk to avoid fetching on every invocation.
+--
+-- = Termination Guarantees
+--
+-- This module mixes pure and I/O functions:
+--
+-- * __Pure functions__ (isFresh, splitMethod, lookupMethodSchema): Provably terminate
+-- * __File I/O__ (loadCache, saveCache): Bounded by OS file operations
+-- * __Orchestration__ (loadSchemaWithCache): Delegates timeout to fetch functions
+--
+-- == Audit Status
+--
+-- ✅ Pure functions provably terminate
+-- ✅ File I/O has exception handling
+-- ✅ Fetch timeouts delegated to Transport layer
+-- ✅ No unnecessary timeouts
+--
 module Plexus.Schema.Cache
   ( -- * Types
     CachedSchema(..)

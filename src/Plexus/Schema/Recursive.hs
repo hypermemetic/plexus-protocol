@@ -26,6 +26,21 @@
 -- - Morphisms: Paths (sequences of child references)
 -- - Identity: Empty path
 -- - Composition: Path concatenation
+--
+-- = Termination Guarantees
+--
+-- This module contains ONLY pure functions - no I/O operations.
+--
+-- * All query functions (isHubActivation, pluginMethods, etc.) are field accessors
+-- * JSON parsing uses total functions (fromJSON returns Either)
+-- * List operations (map, fromMaybe) are bounded by input size
+--
+-- == Audit Status
+--
+-- ✅ Entirely pure (no I/O)
+-- ✅ All functions provably terminate
+-- ✅ No timeouts needed
+--
 module Plexus.Schema.Recursive
   ( -- * Core Types
     PluginSchema(..)

@@ -5,6 +5,20 @@
 -- Maintains a pool of persistent WebSocket connections to avoid
 -- the ~200ms overhead of creating a new connection for each RPC call.
 --
+-- = Termination Guarantees
+--
+-- This module is a thin wrapper around Data.Pool:
+--
+-- * All pool operations delegate to resource-pool library (proven bounded)
+-- * Connection creation inherits 5s timeout from 'Plexus.Client.connect'
+-- * Connection destruction is bounded by 'Plexus.Client.disconnect'
+-- * withPooledConnection ensures cleanup via exception handling
+--
+-- == Audit Status
+--
+-- ✅ No timeouts needed (delegates to Client + resource-pool)
+-- ✅ All operations are bounded
+--
 -- Usage:
 --
 -- @

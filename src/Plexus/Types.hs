@@ -642,6 +642,9 @@ instance ToJSON PlexusStreamItem where
     ]
 
 -- | Create a subscription request
+--
+-- Termination: Pure constructor - terminates immediately
+-- Proof: No recursion, all fields strict and finite
 mkSubscribeRequest :: RequestId -> Text -> Value -> RpcRequest
 mkSubscribeRequest rid method params = RpcRequest
   { rpcReqJsonrpc = "2.0"
@@ -651,6 +654,9 @@ mkSubscribeRequest rid method params = RpcRequest
   }
 
 -- | Create an unsubscribe request
+--
+-- Termination: Pure constructor with one nested pure call (toJSON)
+-- Proof: toJSON for lists terminates (structural recursion on finite list)
 mkUnsubscribeRequest :: RequestId -> Text -> SubscriptionId -> RpcRequest
 mkUnsubscribeRequest rid unsubMethod subId = RpcRequest
   { rpcReqJsonrpc = "2.0"
@@ -660,5 +666,8 @@ mkUnsubscribeRequest rid unsubMethod subId = RpcRequest
   }
 
 -- | Extract the Plexus RPC hash from a stream item
+--
+-- Termination: Pure field accessor - terminates immediately
+-- Proof: Record field access is O(1), no recursion
 getPlexusHash :: PlexusStreamItem -> Text
 getPlexusHash = itemPlexusHash
