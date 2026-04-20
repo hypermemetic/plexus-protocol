@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-protocol
-version:            0.3.2.0
+version:            0.4.0.0
 synopsis:           Plexus RPC protocol types and client
 license:            MIT
 author:
@@ -23,6 +23,7 @@ library
     aeson-casing >= 0.2,
     text >= 2.0,
     bytestring >= 0.11,
+    case-insensitive >= 1.2,
     containers >= 0.6,
     websockets >= 0.13,
     network >= 3.1,
