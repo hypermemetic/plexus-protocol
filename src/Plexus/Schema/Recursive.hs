@@ -54,7 +54,8 @@ module Plexus.Schema.Recursive
 import Control.Applicative ((<|>))
 
 import Data.Aeson
-import Data.Maybe (fromMaybe)
+import Data.Aeson.Types (Parser)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
@@ -90,28 +91,47 @@ instance ToJSON DeprecationInfo where
     , "message"    .= depMessage
     ]
 
--- | Semantic role of a method (for future catalog/UX use).
+-- | Structural role of a method in the activation graph (IR-2 / IR-3).
 --
---   Parsed permissively: any unknown string becomes 'MethodRoleOther'.
+--   Mirrors the Rust @plexus_core::MethodRole@ enum. Tagged on the wire
+--   with a @kind@ discriminator and @snake_case@ variant names:
+--
+--   @
+--   {"kind": "rpc"}
+--   {"kind": "static_child"}
+--   {"kind": "dynamic_child", "list_method": "planet_names", "search_method": null}
+--   @
+--
+--   Defaults to 'MethodRoleRpc' when absent so pre-IR servers deserialize
+--   cleanly (see 'MethodSchema.methodRole' parser).
 data MethodRole
-  = MethodRoleQuery
-  | MethodRoleCommand
-  | MethodRoleStream
-  | MethodRoleOther Text
+  = MethodRoleRpc
+  | MethodRoleStaticChild
+  | MethodRoleDynamicChild
+      { listMethod   :: Maybe Text
+      , searchMethod :: Maybe Text
+      }
   deriving stock (Show, Eq, Generic)
 
 instance FromJSON MethodRole where
-  parseJSON = withText "MethodRole" $ \t -> pure $ case t of
-    "query"   -> MethodRoleQuery
-    "command" -> MethodRoleCommand
-    "stream"  -> MethodRoleStream
-    other     -> MethodRoleOther other
+  parseJSON = withObject "MethodRole" $ \o -> do
+    kind <- o .: "kind" :: Parser Text
+    case kind of
+      "rpc"           -> pure MethodRoleRpc
+      "static_child"  -> pure MethodRoleStaticChild
+      "dynamic_child" -> MethodRoleDynamicChild
+        <$> o .:? "list_method"
+        <*> o .:? "search_method"
+      other -> fail $ "Unknown MethodRole kind: " <> T.unpack other
 
 instance ToJSON MethodRole where
-  toJSON MethodRoleQuery       = String "query"
-  toJSON MethodRoleCommand     = String "command"
-  toJSON MethodRoleStream      = String "stream"
-  toJSON (MethodRoleOther t)   = String t
+  toJSON MethodRoleRpc         = object ["kind" .= ("rpc" :: Text)]
+  toJSON MethodRoleStaticChild = object ["kind" .= ("static_child" :: Text)]
+  toJSON (MethodRoleDynamicChild lm sm) =
+    object $ ("kind" .= ("dynamic_child" :: Text)) : catMaybes
+      [ ("list_method"   .=) <$> lm
+      , ("search_method" .=) <$> sm
+      ]
 
 -- | Shallow parameter schema with optional per-field deprecation.
 --
@@ -185,7 +205,7 @@ data MethodSchema = MethodSchema
   , methodResponseType    :: Maybe Value  -- ^ JSON Schema for the client→server response type (when bidirectional)
   , methodDeprecation     :: Maybe DeprecationInfo  -- ^ Deprecation info, if any (IR-5)
   , methodParamSchemas    :: Maybe [ParamSchema]    -- ^ Optional structured param info with per-field deprecations (IR-5)
-  , methodRole            :: Maybe MethodRole       -- ^ Semantic role (query/command/stream), if declared (IR-5)
+  , methodRole            :: MethodRole             -- ^ Structural role in the activation graph (IR-2 / IR-3); defaults to 'MethodRoleRpc'
   }
   deriving stock (Show, Eq, Generic)
 
@@ -202,7 +222,7 @@ instance FromJSON MethodSchema where
     <*> o .:? "response_type"
     <*> o .:? "deprecation"
     <*> o .:? "param_schemas"
-    <*> o .:? "role"
+    <*> o .:? "role" .!= MethodRoleRpc
 
 instance ToJSON MethodSchema where
   toJSON MethodSchema{..} = object
