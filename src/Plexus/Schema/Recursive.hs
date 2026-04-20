@@ -34,6 +34,11 @@ module Plexus.Schema.Recursive
   , PluginHash
   , SchemaResult(..)
 
+    -- * Deprecation Metadata (IR-5)
+  , DeprecationInfo(..)
+  , ParamSchema(..)
+  , MethodRole(..)
+
     -- * Queries
   , isHubActivation
   , isLeafActivation
@@ -53,6 +58,88 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
+
+-- ============================================================================
+-- Deprecation Metadata (IR-5)
+-- ============================================================================
+
+-- | Structured deprecation metadata attached to activations, methods, and
+--   parameter fields.
+--
+--   All three text fields use JSON snake_case on the wire
+--   (@since@, @removed_in@, @message@). Producers emitted before IR-2
+--   may omit the outer field entirely; consumers should use @.:?@ so a
+--   missing value deserializes as 'Nothing' on the containing record.
+data DeprecationInfo = DeprecationInfo
+  { depSince     :: Text   -- ^ Version the surface became deprecated.
+  , depRemovedIn :: Text   -- ^ Version at which the surface will be removed.
+  , depMessage   :: Text   -- ^ Human-readable migration guidance.
+  }
+  deriving stock (Show, Eq, Generic)
+
+instance FromJSON DeprecationInfo where
+  parseJSON = withObject "DeprecationInfo" $ \o -> DeprecationInfo
+    <$> o .:  "since"
+    <*> o .:  "removed_in"
+    <*> o .:  "message"
+
+instance ToJSON DeprecationInfo where
+  toJSON DeprecationInfo{..} = object
+    [ "since"      .= depSince
+    , "removed_in" .= depRemovedIn
+    , "message"    .= depMessage
+    ]
+
+-- | Semantic role of a method (for future catalog/UX use).
+--
+--   Parsed permissively: any unknown string becomes 'MethodRoleOther'.
+data MethodRole
+  = MethodRoleQuery
+  | MethodRoleCommand
+  | MethodRoleStream
+  | MethodRoleOther Text
+  deriving stock (Show, Eq, Generic)
+
+instance FromJSON MethodRole where
+  parseJSON = withText "MethodRole" $ \t -> pure $ case t of
+    "query"   -> MethodRoleQuery
+    "command" -> MethodRoleCommand
+    "stream"  -> MethodRoleStream
+    other     -> MethodRoleOther other
+
+instance ToJSON MethodRole where
+  toJSON MethodRoleQuery       = String "query"
+  toJSON MethodRoleCommand     = String "command"
+  toJSON MethodRoleStream      = String "stream"
+  toJSON (MethodRoleOther t)   = String t
+
+-- | Shallow parameter schema with optional per-field deprecation.
+--
+--   Not every producer emits this; synapse treats 'Nothing' as "no
+--   per-field metadata available" and falls back to the raw
+--   'methodParams' 'Value' for legacy rendering.
+data ParamSchema = ParamSchema
+  { paramName         :: Text
+  , paramDescription  :: Maybe Text
+  , paramRequired     :: Bool
+  , paramDeprecation  :: Maybe DeprecationInfo
+  }
+  deriving stock (Show, Eq, Generic)
+
+instance FromJSON ParamSchema where
+  parseJSON = withObject "ParamSchema" $ \o -> ParamSchema
+    <$> o .:  "name"
+    <*> o .:? "description"
+    <*> o .:? "required" .!= False
+    <*> o .:? "deprecation"
+
+instance ToJSON ParamSchema where
+  toJSON ParamSchema{..} = object
+    [ "name"        .= paramName
+    , "description" .= paramDescription
+    , "required"    .= paramRequired
+    , "deprecation" .= paramDeprecation
+    ]
 
 -- ============================================================================
 -- Core Types
@@ -96,6 +183,9 @@ data MethodSchema = MethodSchema
   , methodBidirectional   :: Bool         -- ^ True if method uses a bidirectional channel
   , methodRequestType     :: Maybe Value  -- ^ JSON Schema for the server→client request type (when bidirectional)
   , methodResponseType    :: Maybe Value  -- ^ JSON Schema for the client→server response type (when bidirectional)
+  , methodDeprecation     :: Maybe DeprecationInfo  -- ^ Deprecation info, if any (IR-5)
+  , methodParamSchemas    :: Maybe [ParamSchema]    -- ^ Optional structured param info with per-field deprecations (IR-5)
+  , methodRole            :: Maybe MethodRole       -- ^ Semantic role (query/command/stream), if declared (IR-5)
   }
   deriving stock (Show, Eq, Generic)
 
@@ -110,6 +200,9 @@ instance FromJSON MethodSchema where
     <*> o .:? "bidirectional"  .!= False
     <*> o .:? "request_type"
     <*> o .:? "response_type"
+    <*> o .:? "deprecation"
+    <*> o .:? "param_schemas"
+    <*> o .:? "role"
 
 instance ToJSON MethodSchema where
   toJSON MethodSchema{..} = object
@@ -122,6 +215,9 @@ instance ToJSON MethodSchema where
     , "bidirectional"  .= methodBidirectional
     , "request_type"   .= methodRequestType
     , "response_type"  .= methodResponseType
+    , "deprecation"    .= methodDeprecation
+    , "param_schemas"  .= methodParamSchemas
+    , "role"           .= methodRole
     ]
 
 -- | Shallow plugin schema (what we receive from {backend}.schema)
@@ -136,6 +232,7 @@ data PluginSchema = PluginSchema
   , psHash            :: PluginHash
   , psMethods         :: [MethodSchema]
   , psChildren        :: Maybe [ChildSummary]  -- ^ Nothing = leaf, Just = hub activation
+  , psDeprecation     :: Maybe DeprecationInfo -- ^ Activation-level deprecation (IR-5)
   }
   deriving stock (Show, Eq, Generic)
 
@@ -148,6 +245,7 @@ instance FromJSON PluginSchema where
     <*> o .: "hash"
     <*> o .:? "methods" .!= []
     <*> o .:? "children"
+    <*> o .:? "deprecation"
 
 instance ToJSON PluginSchema where
   toJSON PluginSchema{..} = object
@@ -158,6 +256,7 @@ instance ToJSON PluginSchema where
     , "hash"             .= psHash
     , "methods"          .= psMethods
     , "children"         .= psChildren
+    , "deprecation"      .= psDeprecation
     ]
 
 -- | Result of a schema query - can be either a full plugin or just a method
