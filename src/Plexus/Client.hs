@@ -19,6 +19,7 @@ module Plexus.Client
     -- * Configuration
   , SubstrateConfig(..)
   , defaultConfig
+  , cookieHeader
   ) where
 
 import Control.Concurrent (forkIO)
@@ -37,6 +38,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Network.WebSockets (Connection)
 import qualified Network.WebSockets as WS
+import qualified Data.ByteString.Char8 as BS8
+import qualified Data.CaseInsensitive as CI
 import Streaming
 import qualified Streaming.Prelude as Str
 
@@ -48,17 +51,23 @@ data SubstrateConfig = SubstrateConfig
   , substratePort    :: Int
   , substratePath    :: String
   , substrateBackend :: Text    -- ^ Backend name (e.g., "plexus")
+  , substrateHeaders :: WS.Headers  -- ^ Extra HTTP upgrade headers (e.g., Cookie)
   }
   deriving stock (Show, Eq, Ord)
 
 -- | Default configuration for local development (requires backend)
 defaultConfig :: Text -> SubstrateConfig
 defaultConfig backend = SubstrateConfig
-  { substrateHost = "127.0.0.1"
-  , substratePort = 4444
-  , substratePath = "/"
+  { substrateHost    = "127.0.0.1"
+  , substratePort    = 4444
+  , substratePath    = "/"
   , substrateBackend = backend
+  , substrateHeaders = []
   }
+
+-- | Build a Cookie header from a JWT token
+cookieHeader :: Text -> WS.Headers
+cookieHeader tok = [(CI.mk "Cookie", "access_token=" <> BS8.pack (T.unpack tok))]
 
 -- | Pending request with its queue, waiting for subscription ID
 data PendingRequest = PendingRequest
@@ -88,7 +97,8 @@ connect SubstrateConfig{..} = do
   -- Run WebSocket client in a background thread
   -- Catch exceptions inside the thread to prevent them from being printed
   void $ forkIO $
-    (WS.runClient substrateHost substratePort substratePath $ \conn -> do
+    (WS.runClientWith substrateHost substratePort substratePath
+        WS.defaultConnectionOptions substrateHeaders $ \conn -> do
       reader <- async $ readerLoop conn subs pendingReqs
       -- Signal success
       atomically $ putTMVar resultVar (Right (conn, reader))
