@@ -253,6 +253,7 @@ data PluginSchema = PluginSchema
   , psMethods         :: [MethodSchema]
   , psChildren        :: Maybe [ChildSummary]  -- ^ Nothing = leaf, Just = hub activation
   , psDeprecation     :: Maybe DeprecationInfo -- ^ Activation-level deprecation (IR-5)
+  , psRequest         :: Maybe Value           -- ^ JSON Schema of the activation's PlexusRequest struct (REQ-4/REQ-5)
   }
   deriving stock (Show, Eq, Generic)
 
@@ -266,6 +267,7 @@ instance FromJSON PluginSchema where
     <*> o .:? "methods" .!= []
     <*> o .:? "children"
     <*> o .:? "deprecation"
+    <*> o .:? "request"
 
 instance ToJSON PluginSchema where
   toJSON PluginSchema{..} = object
@@ -277,6 +279,7 @@ instance ToJSON PluginSchema where
     , "methods"          .= psMethods
     , "children"         .= psChildren
     , "deprecation"      .= psDeprecation
+    , "request"          .= psRequest
     ]
 
 -- | Result of a schema query - can be either a full plugin or just a method
