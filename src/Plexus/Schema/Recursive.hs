@@ -47,6 +47,9 @@ module Plexus.Schema.Recursive
   , CredentialIssuer(..)
   , RequiredCredential(..)
 
+    -- * Auth Posture (R-3, ROLES+AP merged wave)
+  , AuthPosture(..)
+
     -- * Queries
   , isHubActivation
   , isLeafActivation
@@ -406,6 +409,48 @@ instance ToJSON RequiredCredential where
     ]
 
 -- ============================================================================
+-- Auth Posture (R-3, ROLES+AP merged wave)
+-- ============================================================================
+
+-- | Declared auth-enforcement posture of the activation a method belongs
+--   to. Mirrors the Rust @plexus_core::plexus::schema::AuthPosture@ enum
+--   added in R-2 (@feature/R-2-credential-wire@, commit @80eaba7@).
+--
+--   Wire format: a bare snake_case string (matches
+--   @#[serde(rename_all = "snake_case")]@ on the Rust enum):
+--
+--   @
+--   "required" | "optional" | "mixed" | "none"
+--   @
+--
+--   Pre-R-2 producers omit the containing @auth_posture@ key entirely;
+--   consumers use @.:?@ so absence decodes as 'Nothing' on the containing
+--   record. The Rust enum is @#[non_exhaustive]@; an unrecognized posture
+--   string fails the parse loudly (same posture as 'MethodRole' above) so
+--   a wire-contract drift is caught rather than silently dropped.
+data AuthPosture
+  = AuthPostureRequired  -- ^ Every method is auth-gated or explicitly public.
+  | AuthPostureOptional  -- ^ No enforcement; auth may be asymmetric across methods.
+  | AuthPostureMixed     -- ^ Asymmetric auth, explicitly acknowledged.
+  | AuthPostureNone      -- ^ Affirmatively public activation; no method takes auth.
+  deriving stock (Show, Eq, Generic)
+
+instance FromJSON AuthPosture where
+  parseJSON = withText "AuthPosture" $ \case
+    "required" -> pure AuthPostureRequired
+    "optional" -> pure AuthPostureOptional
+    "mixed"    -> pure AuthPostureMixed
+    "none"     -> pure AuthPostureNone
+    other      -> fail $ "Unknown auth_posture: " <> T.unpack other
+
+instance ToJSON AuthPosture where
+  toJSON = String . \case
+    AuthPostureRequired -> "required"
+    AuthPostureOptional -> "optional"
+    AuthPostureMixed    -> "mixed"
+    AuthPostureNone     -> "none"
+
+-- ============================================================================
 -- Core Types
 -- ============================================================================
 
@@ -461,6 +506,19 @@ data MethodSchema = MethodSchema
     --   (AUTHZ-CRED-IR-1). 'Nothing' for @public@ methods or methods with
     --   no scope-derived requirement. Pre-CRED-CORE-3 producers omit the
     --   key entirely; the parser defaults it to 'Nothing'.
+  , methodAuthPosture :: Maybe AuthPosture
+    -- ^ Declared auth posture of the activation this method belongs to
+    --   (R-3; wire field added in R-2, joint AP-1). 'Nothing' when the
+    --   activation never declared a posture — pre-R-2 producers and
+    --   posture-silent activations omit the @auth_posture@ key entirely
+    --   and are byte-identical on the wire.
+  , methodPublic :: Bool
+    -- ^ Whether this method is explicitly public — exempt from the
+    --   default-deny gate (R-3; wire field added in R-2,
+    --   @#[plexus::method(public)]@). @public@ and a populated
+    --   'methodRequiresCredential' are mutually exclusive by construction
+    --   on the producer side. Pre-R-2 producers omit the @public@ key;
+    --   the parser defaults it to 'False'.
   }
   deriving stock (Show, Eq, Generic)
 
@@ -480,6 +538,9 @@ instance FromJSON MethodSchema where
     <*> o .:? "role" .!= MethodRoleRpc
     <*> o .:? "credentials"          .!= []
     <*> o .:? "requires_credential"
+    -- R-3: absent on the wire => Nothing/False (pre-R-2 producers).
+    <*> o .:? "auth_posture"
+    <*> o .:? "public"               .!= False
 
 instance ToJSON MethodSchema where
   toJSON MethodSchema{..} =
@@ -505,6 +566,10 @@ instance ToJSON MethodSchema where
           then Nothing
           else Just ("credentials" .= methodCredentials)
       , ("requires_credential" .=) <$> methodRequiresCredential
+      -- R-3: elided when Nothing/False to match the producer-side
+      -- 'skip_serializing_if' behaviour (no nulls, no "public": false).
+      , ("auth_posture" .=) <$> methodAuthPosture
+      , if methodPublic then Just ("public" .= True) else Nothing
       ]
 
 -- | Shallow plugin schema (what we receive from {backend}.schema)
