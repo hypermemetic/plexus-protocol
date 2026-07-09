@@ -62,8 +62,6 @@ module Plexus.Schema.Recursive
   , parseSchemaResult
   ) where
 
-import Control.Applicative ((<|>))
-
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.Maybe (catMaybes, fromMaybe)
@@ -614,22 +612,21 @@ instance ToJSON PluginSchema where
     , "request"          .= psRequest
     ]
 
--- | Result of a schema query - can be either a full plugin or just a method
+-- | Result of a schema query — always the single unified plugin schema.
+--
+-- PROT schema unification (PLX-13) removed the former @SchemaMethod MethodSchema@
+-- variant: per-method detail is read from 'psMethods', never returned as a
+-- distinct schema result. 'MethodSchema' itself remains the element type of
+-- 'psMethods'.
 data SchemaResult
   = SchemaPlugin PluginSchema
-  | SchemaMethod MethodSchema
   deriving stock (Show, Eq)
 
 instance FromJSON SchemaResult where
-  parseJSON v =
-    -- Try PluginSchema first (has "namespace" field)
-    (SchemaPlugin <$> parseJSON v) <|>
-    -- Fall back to MethodSchema (has "name" field)
-    (SchemaMethod <$> parseJSON v)
+  parseJSON v = SchemaPlugin <$> parseJSON v
 
 instance ToJSON SchemaResult where
   toJSON (SchemaPlugin p) = toJSON p
-  toJSON (SchemaMethod m) = toJSON m
 
 -- ============================================================================
 -- Basic Queries

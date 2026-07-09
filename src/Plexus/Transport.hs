@@ -40,7 +40,8 @@ import System.IO.Unsafe (unsafePerformIO)
 import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
 import Plexus.Client.Pool (ConnectionPool, createConnectionPool, withPooledConnection, defaultPlexusPoolConfig)
 import Plexus.Types (PlexusStreamItem(..), TransportError(..), Response(..), StandardResponse)
-import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult)
+import Data.List (find)
+import Plexus.Schema.Recursive (PluginSchema, MethodSchema, SchemaResult(..), parsePluginSchema, parseSchemaResult, psMethods, methodName)
 
 -- | Global connection pool cache
 -- One pool per unique SubstrateConfig to enable connection reuse across calls
@@ -149,24 +150,30 @@ extractSchema items =
       (err:_) -> Left err
       [] -> Left "No schema in response"
 
--- | Fetch a specific method's schema
--- Uses the parameter-based query: plugin.schema with {"method": "name"}
+-- | Fetch a specific method's schema.
+--
+-- PROT schema unification (PLX-13): the server no longer returns a bare
+-- MethodSchema (the @SchemaMethod@ result variant is gone). We fetch the unified
+-- 'PluginSchema' at the path and drill into 'psMethods' for the requested method.
 fetchMethodSchemaAt :: SubstrateConfig -> [Text] -> Text -> IO (Either TransportError MethodSchema)
-fetchMethodSchemaAt cfg path methodName = do
+fetchMethodSchemaAt cfg path wantMethod = do
   let backend = substrateBackend cfg
   let schemaMethod = if null path
         then backend <> ".schema"
         else T.intercalate "." path <> ".schema"
   result <- rpcCallWith cfg (backend <> ".call") (object
     [ "method" .= schemaMethod
-    , "params" .= object ["method" .= methodName]
+    , "params" .= object []
     ])
   case result of
     Left transportErr -> pure $ Left transportErr
     Right items -> case extractSchemaResult items of
       Left parseErr -> pure $ Left $ ProtocolError parseErr
-      Right (SchemaMethod m) -> pure $ Right m
-      Right (SchemaPlugin _) -> pure $ Left $ ProtocolError "Expected method schema, got plugin schema"
+      Right (SchemaPlugin plugin) ->
+        case find ((== wantMethod) . methodName) (psMethods plugin) of
+          Just m  -> pure $ Right m
+          Nothing -> pure $ Left $ ProtocolError
+            ("Method '" <> wantMethod <> "' not found in unified schema")
 
 -- | Extract SchemaResult (plugin or method) from stream items
 extractSchemaResult :: [PlexusStreamItem] -> Either Text SchemaResult
