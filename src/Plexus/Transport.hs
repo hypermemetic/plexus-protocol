@@ -10,6 +10,7 @@ module Plexus.Transport
     -- * RPC Calls (streaming)
   , rpcCallStreaming
   , invokeMethodStreaming
+  , invokeMethodStreamingCancellable
 
     -- * Bidirectional Response
   , sendBidirectionalResponse
@@ -41,7 +42,7 @@ import qualified Streaming.Prelude as S
 import qualified Network.Socket as NS
 import System.IO.Unsafe (unsafePerformIO)
 
-import Plexus.Client (SubstrateConfig(..), connect, disconnect, substrateRpc, defaultConfig)
+import Plexus.Client (SubstrateConfig(..), CancelTurn(..), connect, disconnect, substrateRpc, substrateRpcCancellable, defaultConfig)
 import Plexus.Client.Pool (ConnectionPool, createConnectionPool, withPooledConnection, defaultPlexusPoolConfig)
 import Plexus.Types (PlexusStreamItem(..), TransportError(..), Response(..), StandardResponse)
 import Data.List (find)
@@ -114,10 +115,16 @@ rpcCallStreaming cfg method params onItem = do
   pure result
 
 doCallStreaming :: SubstrateConfig -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO ()
-doCallStreaming cfg method params onItem = do
+doCallStreaming cfg method params onItem =
+  doCallStreamingCancellable (\_ -> pure ()) cfg method params onItem
+
+doCallStreamingCancellable
+  :: (CancelTurn -> IO ()) -> SubstrateConfig -> Text -> Value
+  -> (PlexusStreamItem -> IO ()) -> IO ()
+doCallStreamingCancellable onCancel cfg method params onItem = do
   pool <- getOrCreatePool cfg
   withPooledConnection pool $ \conn ->
-    S.mapM_ onItem $ substrateRpc conn method params
+    S.mapM_ onItem $ substrateRpcCancellable onCancel conn method params
 
 -- | Streaming method invocation
 invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
@@ -127,6 +134,21 @@ invokeMethodStreaming cfg namespacePath method params onItem = do
   let dotPath = T.intercalate "." (fullPath ++ [method])
   let callParams = object ["method" .= dotPath, "params" .= params]
   rpcCallStreaming cfg (backend <> ".call") callParams onItem
+
+-- | PLX-123: 'invokeMethodStreaming', plus the cancel handle for the
+-- subscription this call opens. See 'Plexus.Client.substrateRpcCancellable'
+-- for the channel decision and exactly what it does not assert.
+invokeMethodStreamingCancellable
+  :: (CancelTurn -> IO ())
+  -> SubstrateConfig -> [Text] -> Text -> Value
+  -> (PlexusStreamItem -> IO ()) -> IO (Either TransportError ())
+invokeMethodStreamingCancellable onCancel cfg namespacePath method params onItem = do
+  let backend = substrateBackend cfg
+  let fullPath = if null namespacePath then [backend] else namespacePath
+  let dotPath = T.intercalate "." (fullPath ++ [method])
+  let callParams = object ["method" .= dotPath, "params" .= params]
+  (Right <$> doCallStreamingCancellable onCancel cfg (backend <> ".call") callParams onItem)
+    `catch` categorizeException cfg
 
 -- | Fetch schema at a specific path
 -- Empty path = root (<backend>.schema)

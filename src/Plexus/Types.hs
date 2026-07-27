@@ -29,6 +29,7 @@ module Plexus.Types
     -- * Helpers
   , mkSubscribeRequest
   , mkUnsubscribeRequest
+  , subscriptionIdValue
   , getPlexusHash
   ) where
 
@@ -601,12 +602,40 @@ mkSubscribeRequest rid method params = RpcRequest
   , rpcReqId      = rid
   }
 
--- | Create an unsubscribe request
+-- | The subscription id as the server actually sent it.
+--
+-- PLX-123. 'SubscriptionId' is a 'Text' that, for a NON-string id, holds the
+-- id's raw JSON encoding (see its 'FromJSON' instance just above). plexus
+-- substrates send a NUMBER -- @{"id":1,"result":1459055599644984}@ -- so
+-- sending @unSubscriptionId@ back verbatim quotes it, and jsonrpsee answers
+-- @{"result":false}@: it has no subscription under the STRING
+-- @"1459055599644984"@. Round-tripping the text through the JSON parser
+-- restores the number.
+--
+-- Residual, and it is real: an id that genuinely IS the string @"123"@ comes
+-- back as the number @123@. That ambiguity is inherited from the 'FromJSON'
+-- instance, which discards the distinction before this function is reached;
+-- fixing it properly means holding a 'Value' in the newtype. No plexus
+-- substrate issues string ids today, so nothing is broken by it now.
+subscriptionIdValue :: SubscriptionId -> Value
+subscriptionIdValue (SubscriptionId t) =
+  case decode (LBS.fromStrict (T.encodeUtf8 t)) of
+    Just v  -> v
+    Nothing -> String t
+
+-- | Create an unsubscribe request.
+--
+-- __PLX-123 fixed a latent bug here.__ This function existed, was exported and
+-- was called by nothing, so its params encoding had never met a server. It sent
+-- @[unSubscriptionId subId]@ -- the id as a JSON STRING -- which every plexus
+-- substrate rejects with @result: false@ because it issues NUMERIC ids. Now it
+-- sends what the server sent (see 'subscriptionIdValue'). Measured against a
+-- live substrate, not reasoned about.
 mkUnsubscribeRequest :: RequestId -> Text -> SubscriptionId -> RpcRequest
 mkUnsubscribeRequest rid unsubMethod subId = RpcRequest
   { rpcReqJsonrpc = "2.0"
   , rpcReqMethod  = unsubMethod
-  , rpcReqParams  = toJSON [unSubscriptionId subId]
+  , rpcReqParams  = toJSON [subscriptionIdValue subId]
   , rpcReqId      = rid
   }
 

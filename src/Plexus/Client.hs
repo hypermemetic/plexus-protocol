@@ -15,6 +15,8 @@ module Plexus.Client
 
     -- * Core RPC primitive
   , substrateRpc
+  , substrateRpcCancellable
+  , CancelTurn(..)
 
     -- * Configuration
   , SubstrateConfig(..)
@@ -212,7 +214,40 @@ substrateRpc
   -> Text              -- ^ Method name (e.g., "bash_execute")
   -> Value             -- ^ Parameters
   -> Stream (Of PlexusStreamItem) IO ()
-substrateRpc conn method params = do
+substrateRpc = substrateRpcCancellable (\_ -> pure ())
+
+-- | PLX-123 / M3·D, decision gate 2 — the cancellation channel.
+--
+-- RFC 002 §10.2 leaves the cancellation channel deliberately unspecified:
+-- "cancellation is therefore transport-defined and is NOT projectable the way
+-- callbacks are." This is where synapse defines it, and the definition is
+-- deliberately the smallest one that already exists on the wire:
+--
+-- __the cancellation channel is the JSON-RPC subscription this very call
+-- opened, on the same multiplexed connection, addressed by its
+-- 'SubscriptionId'.__
+--
+-- No second socket, no second port, no out-of-band identity. The substrate
+-- already registers an unsubscribe method alongside every subscription
+-- (@\<ns\>.call@ is paired with @\<ns\>.call_unsub@ — see
+-- @plexus-core@'s @arc_into_rpc_module@), and the subscription id is the only
+-- per-invocation identity the server has ever put on this wire. The turn id
+-- would be a better address, because it is what @LiveTurns::cancel_turn@ takes
+-- — but the server does not advertise it except inside a callback's
+-- @request_id@, so addressing a turn directly is a server-supply change and
+-- not a client one. That gap is recorded in the PLX-84 amendment.
+--
+-- The caller is handed a pre-bound @IO ()@ that sends the unsubscribe. It is
+-- an @IO ()@ rather than the id itself so that no caller can be tempted to
+-- address the connection instead: the connection is __pooled and shared__, so
+-- a cancel must be per-subscription or it would tear down someone else's call.
+substrateRpcCancellable
+  :: (CancelTurn -> IO ())  -- ^ Handed the cancel action once the substrate confirms the subscription.
+  -> SubstrateConnection
+  -> Text
+  -> Value
+  -> Stream (Of PlexusStreamItem) IO ()
+substrateRpcCancellable onCancelHandle conn method params = do
   -- Get next request ID
   rid <- liftIO $ atomicModifyIORef' (scNextId conn) $ \n -> (n + 1, RequestId n)
 
@@ -253,6 +288,11 @@ substrateRpc conn method params = do
           pure ()
 
         Success subId -> do
+          -- Hand the caller its cancel action now that the subscription
+          -- exists and is addressable, and BEFORE the first item is pulled:
+          -- a cancel that only becomes possible after the first update
+          -- cannot cancel a turn that is slow to produce one.
+          liftIO $ onCancelHandle (CancelTurn (sendUnsubscribe conn method subId))
           -- Stream items until done, cleanup when finished
           streamItems queue subId <* liftIO (cleanup subId)
   where
@@ -274,3 +314,27 @@ substrateRpc conn method params = do
     cleanup :: SubscriptionId -> IO ()
     cleanup subId = atomically $ modifyTVar' (scSubscriptions conn) $
       Map.delete subId
+
+-- | The cancel action for one live subscription. Opaque on purpose — see
+-- 'substrateRpcCancellable' for why the caller gets an action and not an id.
+newtype CancelTurn = CancelTurn { runCancelTurn :: IO () }
+
+-- | Send the JSON-RPC unsubscribe paired with @subMethod@.
+--
+-- jsonrpsee names the pair at registration time; @plexus-core@ spells it
+-- @\<sub-method\>_unsub@, so @substrate.call@ is cancelled by
+-- @substrate.call_unsub@. This is fire-and-forget by design: the reply is a
+-- bare boolean on a request id nothing is waiting on, and the caller has
+-- already stopped consuming.
+--
+-- __What this does and does not assert.__ It tears down the subscription. It
+-- does __not__ reach @LiveTurns::cancel_turn@, so it does not deliver RFC 002
+-- §6.8's cooperative signal to the turn, and the server does not answer with a
+-- @Cancelled@ terminal. Callers must not render this as a server-confirmed
+-- cancellation; synapse renders it as @synapse:client_cancelled@ and says so.
+sendUnsubscribe :: SubstrateConnection -> Text -> SubscriptionId -> IO ()
+sendUnsubscribe conn subMethod subId = do
+  rid <- atomicModifyIORef' (scNextId conn) $ \n -> (n + 1, RequestId n)
+  let req = mkUnsubscribeRequest rid (subMethod <> "_unsub") subId
+  WS.sendTextData (scConnection conn) (encode req)
+    `catch` \(_ :: SomeException) -> pure ()
