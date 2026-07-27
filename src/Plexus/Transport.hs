@@ -20,6 +20,10 @@ module Plexus.Transport
   , extractSchema
   , extractSchemaResult
 
+    -- * Connectome Fetching (PLX-121 / PLX-142)
+  , fetchConnectomeDocument
+  , connectomeMethodName
+
     -- * Method Invocation (collected)
   , invokeMethod
   , invokeRaw
@@ -174,6 +178,53 @@ fetchMethodSchemaAt cfg path wantMethod = do
           Just m  -> pure $ Right m
           Nothing -> pure $ Left $ ProtocolError
             ("Method '" <> wantMethod <> "' not found in unified schema")
+
+-- | The wire method that serves a CONNECTOME RFC 002 document (PLX-142).
+--
+-- It is registered once per hub as @{hubNamespace}.connectome@ — there is no
+-- per-activation @{ns}.connectome@ and no separate @child_connectome@ method;
+-- the lazy child fetch is the SAME method with a @namespace@ parameter.
+-- Verified against a live substrate: @solar.connectome@ answers @-32601 Method
+-- not found@, @substrate.connectome {"namespace":"solar"}@ answers the subtree.
+connectomeMethodName :: SubstrateConfig -> Text
+connectomeMethodName cfg = substrateBackend cfg <> ".connectome"
+
+-- | Fetch a Connectome document.
+--
+-- @Nothing@ fetches the hub's own whole-tree document; @Just ns@ fetches the
+-- child at that namespace as a document in its own right (RFC §5.1's lazy
+-- Dynamic-edge fetch).
+--
+-- Returns the raw 'Value' rather than a decoded document on purpose:
+-- plexus-protocol owns the wire, and @plexus-connectome@ owns the model. This
+-- package does not depend on the latter, so the ONE document model is not
+-- forked here.
+fetchConnectomeDocument
+  :: SubstrateConfig
+  -> Maybe Text
+  -> IO (Either TransportError Value)
+fetchConnectomeDocument cfg mNamespace = do
+  let method = connectomeMethodName cfg
+      params = case mNamespace of
+        Nothing -> object []
+        Just ns -> object ["namespace" .= ns]
+  result <- rpcCallWith cfg method params
+  case result of
+    Left transportErr -> pure $ Left transportErr
+    Right items -> pure $ extractConnectome method items
+
+-- | Pull the document out of the subscription frames.
+--
+-- The server tags the frame with @content_type = {ns}.connectome@ (deliberately
+-- NOT @*.schema@, so nothing tries to decode it as a legacy PluginSchema).
+extractConnectome :: Text -> [PlexusStreamItem] -> Either TransportError Value
+extractConnectome method items =
+  case [dat | StreamData _ _ ct dat <- items, ct == method] of
+    (dat:_) -> Right dat
+    [] -> case [err | StreamError _ _ err _ <- items] of
+      (err:_) -> Left $ ProtocolError err
+      [] -> Left $ ProtocolError $
+        "no " <> method <> " frame in response"
 
 -- | Extract SchemaResult (plugin or method) from stream items
 extractSchemaResult :: [PlexusStreamItem] -> Either Text SchemaResult
